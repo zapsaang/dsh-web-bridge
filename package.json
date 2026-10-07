@@ -1,6 +1,28 @@
 {
   "name": "dsh-web-bridge",
   "version": "0.1.0-alpha.1",
+  "description": "Unix-socket session bridge for DeepSeek Harness behind Cloudflare Access, packaged as a Cordis plugin.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/zapsaang/dsh-web-bridge.git"
+  },
+  "homepage": "https://github.com/zapsaang/dsh-web-bridge#readme",
+  "bugs": {
+    "url": "https://github.com/zapsaang/dsh-web-bridge/issues"
+  },
+  "keywords": [
+    "deepseek",
+    "dsh",
+    "cordis",
+    "cloudflare-access",
+    "unix-socket"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "tag": "alpha",
+    "registry": "https://registry.npmjs.org/"
+  },
   "type": "module",
   "exports": {
     ".": {

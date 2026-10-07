@@ -53,9 +53,14 @@ test('T-P4: packed tarball carries only built artifacts, the overlay, and metada
     assert.ok(!SECRET_NAME.test(rel), `no secret-bearing filename: ${rel}`);
     assert.ok(!readFileSync(join(extract, 'package', rel), 'utf8').includes('PRIVATE KEY'), `no key material: ${rel}`);
   }
-  for (const required of ['package.json', 'README.md', 'cordis.patch.yml', 'lib/dsh/index.js', 'lib/dsh/index.d.ts']) {
+  for (const required of ['package.json', 'README.md', 'LICENSE', 'cordis.patch.yml', 'lib/dsh/index.js', 'lib/dsh/index.d.ts']) {
     assert.ok(files.includes(required), `required entry present: ${required}`);
   }
+  const manifest: unknown = JSON.parse(readFileSync(join(extract, 'package/package.json'), 'utf8'));
+  assert.ok(typeof manifest === 'object' && manifest !== null && 'publishConfig' in manifest);
+  assert.deepEqual(manifest.publishConfig, {
+    access: 'public', tag: 'alpha', registry: 'https://registry.npmjs.org/',
+  });
   // Every src module has its built js + d.ts pair inside the tarball.
   const sources = walk('src').filter((path) => path.endsWith('.ts') && !path.endsWith('.d.ts'));
   assert.ok(sources.length > 0, 'src modules discovered');
