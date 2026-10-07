@@ -1,6 +1,6 @@
 {
   "name": "@zapsaang/dsh-web-bridge",
-  "version": "0.1.0-alpha.1",
+  "version": "0.1.0-alpha.2",
   "description": "Unix-socket session bridge for DeepSeek Harness behind Cloudflare Access, packaged as a Cordis plugin.",
   "license": "MIT",
   "repository": {
