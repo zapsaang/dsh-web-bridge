@@ -1,0 +1,141 @@
+name: Publish alpha
+
+on:
+  workflow_dispatch:
+    inputs:
+      expected_version:
+        description: Exact X.Y.Z-alpha.N version in package.json
+        required: true
+        type: string
+      publish:
+        description: Publish the verified tarball using npm trusted publishing
+        type: boolean
+        default: false
+
+permissions: {}
+
+concurrency:
+  group: npm-alpha-release
+  cancel-in-progress: false
+
+env:
+  EXPECTED_VERSION: ${{ inputs.expected_version }}
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    outputs:
+      sha256: ${{ steps.pack.outputs.sha256 }}
+      artifact_digest: ${{ steps.upload.outputs.artifact-digest }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '24.21.0'
+      - name: Guard release and prepare trusted runtime
+        shell: bash
+        run: |
+          node scripts/check-release.mjs
+          command -v flock
+          command -v tar
+          node --input-type=module <<'JS'
+          import assert from 'node:assert/strict';
+          import { execFileSync } from 'node:child_process';
+          import { appendFileSync, chmodSync, lstatSync, mkdtempSync } from 'node:fs';
+          import { dirname, join, resolve } from 'node:path';
+          assert.equal(process.versions.node, '24.21.0');
+          const [major, minor, patch] = execFileSync('npm', ['--version'], { encoding: 'utf8' }).trim().split('.').map(Number);
+          assert.ok(major > 11 || (major === 11 && (minor > 5 || (minor === 5 && patch >= 1))), 'npm >=11.5.1 required');
+          const home = resolve(process.env.HOME);
+          for (let path = home; ; path = dirname(path)) {
+            const stat = lstatSync(path);
+            assert.ok(stat.isDirectory() && (stat.uid === 0 || stat.uid === process.getuid()) && (stat.mode & 0o022) === 0, 'untrusted runtime ancestor');
+            if (path === '/') break;
+          }
+          const runtime = mkdtempSync(join(home, 'r-'));
+          chmodSync(runtime, 0o700);
+          appendFileSync(process.env.GITHUB_ENV, `XDG_RUNTIME_DIR=${runtime}\n`);
+          JS
+      - name: Install frozen dependencies and pinned Chromium
+        shell: bash
+        run: |
+          corepack pnpm install --frozen-lockfile
+          corepack pnpm exec playwright install --with-deps chromium
+      - name: Typecheck, build, default tests and explicit DSH/browser probes
+        shell: bash
+        run: |
+          corepack pnpm run typecheck
+          corepack pnpm run build
+          corepack pnpm run test
+          node --test .test-dist/test/dsh/*.test.js
+          node --test .test-dist/test/browser/*.test.js
+      - name: Pack once, inspect the real archive and dry-run publish
+        id: pack
+        shell: bash
+        run: |
+          output=$(mktemp -d "$HOME/release-pack-XXXXXX")
+          npm pack --pack-destination "$output"
+          tarball=$(node scripts/check-release.mjs --pack-dir "$output")
+          mv "$tarball" "$output/release.tgz"
+          npm publish "$output/release.tgz" --dry-run --ignore-scripts --tag alpha --access public --registry https://registry.npmjs.org/
+          (cd "$output" && sha256sum release.tgz > SHA256SUMS)
+          read -r checksum _ < "$output/SHA256SUMS"
+          printf 'sha256=%s\npath=%s\n' "$checksum" "$output" >> "$GITHUB_OUTPUT"
+      - name: Upload verified release archive
+        id: upload
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: npm-alpha-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ steps.pack.outputs.path }}/
+          if-no-files-found: error
+          retention-days: 7
+      - name: Record artifact identity
+        env:
+          SHA256: ${{ steps.pack.outputs.sha256 }}
+          ARTIFACT_DIGEST: ${{ steps.upload.outputs.artifact-digest }}
+          ARTIFACT_URL: ${{ steps.upload.outputs.artifact-url }}
+        shell: bash
+        run: |
+          printf 'Tarball SHA256: %s\n\nArtifact digest: %s\n\nArtifact: %s\n\nDry-run validates packaging, not OIDC authentication.\n' "$SHA256" "$ARTIFACT_DIGEST" "$ARTIFACT_URL" >> "$GITHUB_STEP_SUMMARY"
+
+  publish:
+    needs: verify
+    if: ${{ inputs.publish == true && github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-24.04
+    environment: npm
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '24.21.0'
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: npm-alpha-${{ github.run_id }}-${{ github.run_attempt }}
+          path: release-artifact
+      - name: Verify checksum, packed manifest and bundled npm
+        env:
+          SHA256: ${{ needs.verify.outputs.sha256 }}
+        shell: bash
+        run: |
+          command -v tar
+          printf '%s  release-artifact/release.tgz\n' "$SHA256" | sha256sum --check --strict
+          node scripts/check-release.mjs --pack-dir release-artifact
+          node --input-type=module <<'JS'
+          import assert from 'node:assert/strict';
+          import { execFileSync } from 'node:child_process';
+          assert.equal(process.versions.node, '24.21.0');
+          const [major, minor, patch] = execFileSync('npm', ['--version'], { encoding: 'utf8' }).trim().split('.').map(Number);
+          assert.ok(major > 11 || (major === 11 && (minor > 5 || (minor === 5 && patch >= 1))), 'npm >=11.5.1 required');
+          JS
+      - name: Publish the same verified tarball with automatic OIDC provenance
+        shell: bash
+        run: npm publish "$GITHUB_WORKSPACE/release-artifact/release.tgz" --ignore-scripts --tag alpha --access public --registry https://registry.npmjs.org/
