@@ -1,0 +1,16 @@
+ingress:
+  - hostname: dsh.example.com
+    service: unix:/run/dsh-web/session-bridge.sock
+    originRequest:
+      access:
+        required: true
+        teamName: <team>
+        audTag: [<aud-dsh-example-com>]
+  - hostname: dsh2.example.com
+    service: unix:/run/dsh-web/session-bridge.sock
+    originRequest:
+      access:
+        required: true
+        teamName: <team>
+        audTag: [<aud-dsh2-example-com>]
+  - service: http_status:404

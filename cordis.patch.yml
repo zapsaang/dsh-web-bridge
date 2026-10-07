@@ -1,0 +1,7 @@
+- insert:
+    - id: dsh-web-bridge
+      name: dsh-web-bridge
+      inject: [connection, webServer, webRuntime]
+      config:
+        socketPath: /run/dsh-web/session-bridge.sock
+        authorities: [dsh.example.com, dsh2.example.com]
