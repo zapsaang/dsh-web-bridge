@@ -4,7 +4,7 @@
 
 Unix-socket session bridge that puts a [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (DSH) Web GUI behind Cloudflare Access. The bridge is a Cordis plugin that runs inside the DSH process, listens only on a Unix domain socket, and performs the loopback token exchange on behalf of browsers that arrive through the tunnel — so launch tokens never leave the local machine and never appear in a remote URL, log, or address bar.
 
-Authoritative specification: [`docs/dsh-web-bridge-design.md`](https://github.com/zapsaang/dsh-web-bridge/blob/main/docs/dsh-web-bridge-design.md) (section references below, e.g. §12.1, point into that document). The `docs/` and `examples/` paths referenced throughout this README are repository paths; they are not shipped inside the npm tarball, so browse them on GitHub.
+The `§` section references below (e.g. §12.1) point into an internal design document that is **not published in this repository**, so they are stable labels for the topics they annotate rather than reachable links. The `examples/` files are repository paths, not part of the npm tarball — browse them on GitHub.
 
 ## Installation
 
@@ -172,12 +172,18 @@ The published name is **scoped** (`@zapsaang/dsh-web-bridge`). npm rejects the u
 
 ### Toolchain
 
-- Node `24.21.0`, npm `>=11.5.1`, pnpm `12.9.1` (development via corepack); Linux with the `flock` and `tar` system tools.
-- Frozen install: `corepack pnpm install --frozen-lockfile`.
-- Tests that bind a private `XDG_RUNTIME_DIR` need a private directory under `$HOME` (trusted ancestors), not `/tmp`:
+- Node `24.21.0`, npm `>=11.5.1`, pnpm `12.9.1` (development via corepack); `tar` plus the util-linux `flock` binary.
+- The deployment target is Linux. The lease layer spawns the `flock(1)` helper, so the test suite needs it on `PATH`; on macOS it comes from Homebrew, which installs util-linux keg-only and therefore does **not** link `flock` into `PATH` for you:
 
 ```sh
-umask 077
+export PATH="$(brew --prefix)/opt/util-linux/bin:$PATH"   # macOS only
+flock --version                                           # must resolve before running tests
+```
+
+- Frozen install: `corepack pnpm install --frozen-lockfile`.
+- Tests that bind a private `XDG_RUNTIME_DIR` need a private directory under `$HOME` (trusted ancestors), not `/tmp`. `mktemp -d` already creates it `0700`, which is exactly what the lease directory check requires, so no `umask` change is needed:
+
+```sh
 export XDG_RUNTIME_DIR="$(mktemp -d "$HOME/.dsh-test.XXXXXX")"
 ```
 
@@ -192,6 +198,8 @@ node scripts/check-pack-files.mjs                # pack allowlist check
 ```
 
 `prepack` runs `npm run build` as the pack gate, so `npm pack`/`npm publish` do not require pnpm on PATH.
+
+Last verified locally (2026-10-07; macOS 15.7.9, Node 24.21.0, util-linux `flock` 2.42.4): `typecheck` and `build` clean; default gate 418 tests → 417 pass, 0 fail, 1 skipped; DSH suite 60/60; browser suite 7/7; `check-pack-files.mjs` PASS (18 packed files). The single skip is T-H14b, which needs `setpriv` to drop to a foreign UID. The `flock` dependency is the one environment prerequisite that is easy to miss: without it the whole lease layer fails with `ERR_BRIDGE_LEASE_FLOCK` rather than a clear "tool missing" message.
 
 ### Pack, inspect, dry-run
 
