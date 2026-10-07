@@ -166,9 +166,9 @@ Forbidden — must never appear in any log: tokens, tokenized URLs, cookie value
 
 ## Publishing
 
-Maintainer instructions, not a record of completed actions. If the package does not yet exist on the registry, the first publication bootstraps it via maintainer `npm login` + 2FA (below); later releases use the workflow below. Published versions are immutable; every fix needs a new version — current `0.1.0-alpha.1`, next new version e.g. `0.1.0-alpha.2`. README changes only reach the npm page if they land before packing/publishing that version.
+Maintainer instructions, not a record of completed actions. The package already exists on the registry — the maintainer bootstrapped it interactively (`0.0.0-stage` placeholder, then `0.1.0-alpha.1`), so releases now go through the tag-triggered workflow below. Published versions are immutable; every fix needs a new version — current `0.1.0-alpha.2`, next new version e.g. `0.1.0-alpha.3`. README changes only reach the npm page if they land before packing/publishing that version.
 
-The published name is **scoped** (`@zapsaang/dsh-web-bridge`). npm rejects the unscoped `dsh-web-bridge` with a 403 because it is too similar to the existing `dsh-webbridge` package, and that similarity check cannot be appealed — so do not "simplify" the name back to unscoped. The scope is also part of the Cordis load contract: the profile loader resolves the patch row's `name` as a bare module specifier, so `package.json`, `cordis.patch.yml`, and the plugin's exported `name` must always move together. The unscoped name has never been published; the first publication creates `@zapsaang/dsh-web-bridge`.
+The published name is **scoped** (`@zapsaang/dsh-web-bridge`). npm rejects the unscoped `dsh-web-bridge` with a 403 because it is too similar to the existing `dsh-webbridge` package, and that similarity check cannot be appealed — so do not "simplify" the name back to unscoped. The scope is also part of the Cordis load contract: the profile loader resolves the patch row's `name` as a bare module specifier, so `package.json`, `cordis.patch.yml`, and the plugin's exported `name` must always move together. The unscoped name has never been published; the bootstrap created the scoped `@zapsaang/dsh-web-bridge`.
 
 ### Toolchain
 
@@ -181,7 +181,7 @@ flock --version                                           # must resolve before 
 ```
 
 - Frozen install: `corepack pnpm install --frozen-lockfile`.
-- Tests that bind a private `XDG_RUNTIME_DIR` need a private directory under `$HOME` (trusted ancestors), not `/tmp`. `mktemp -d` already creates it `0700`, which is exactly what the lease directory check requires, so no `umask` change is needed:
+- Tests that bind a private `XDG_RUNTIME_DIR` need a private directory whose ancestor chain is real directories (`$HOME` works). `mktemp -d` already creates it `0700`, which is exactly what the lease directory check requires, so no `umask` change is needed. `/tmp` and `$TMPDIR` do **not** work on macOS: both live under `/var`, which is a symlink to `private/var`, and the ancestor rule rejects symlinks with `ERR_BRIDGE_LEASE_DIRECTORY`.
 
 ```sh
 export XDG_RUNTIME_DIR="$(mktemp -d "$HOME/.dsh-test.XXXXXX")"
@@ -199,7 +199,7 @@ node scripts/check-pack-files.mjs                # pack allowlist check
 
 `prepack` runs `npm run build` as the pack gate, so `npm pack`/`npm publish` do not require pnpm on PATH.
 
-Last verified locally (2026-10-07; macOS 15.7.9, Node 24.21.0, util-linux `flock` 2.42.4): `typecheck` and `build` clean; default gate 418 tests → 417 pass, 0 fail, 1 skipped; DSH suite 60/60; browser suite 7/7; `check-pack-files.mjs` PASS (18 packed files). The single skip is T-H14b, which needs `setpriv` to drop to a foreign UID. The `flock` dependency is the one environment prerequisite that is easy to miss: without it the whole lease layer fails with `ERR_BRIDGE_LEASE_FLOCK` rather than a clear "tool missing" message.
+Last verified locally (2026-10-07; macOS 15.7.9, Node 24.21.0, util-linux `flock` 2.42.4): `typecheck` and `build` clean; default gate 422 tests → 421 pass, 0 fail, 1 skipped; DSH suite 60/60; browser suite 7/7; `check-pack-files.mjs` PASS (18 packed files). The single skip is T-H14b, which needs `setpriv` to drop to a foreign UID. The `flock` dependency is the one environment prerequisite that is easy to miss: without it the whole lease layer fails with `ERR_BRIDGE_LEASE_FLOCK` rather than a clear "tool missing" message.
 
 ### Pack, inspect, dry-run
 
@@ -213,9 +213,9 @@ Do not pass `--provenance` locally; provenance comes from CI OIDC only, and a dr
 
 A scoped package packs under a **flattened** filename — npm drops the leading `@` and turns the scope separator into a dash — so `@zapsaang/dsh-web-bridge` produces `zapsaang-dsh-web-bridge-<version>.tgz`.
 
-### First publication (bootstrap, example — not executed)
+### First publication (bootstrap, already done)
 
-If the package does not yet exist on the registry, the maintainer bootstraps it once with an interactive login (2FA) and an explicit tarball publish:
+The package was bootstrapped once by the maintainer with an interactive login (2FA) and an explicit tarball publish — `0.1.0-alpha.1` and the `0.0.0-stage` placeholder are on the registry — so this step is not needed again:
 
 ```sh
 npm login --registry=https://registry.npmjs.org/
@@ -224,13 +224,24 @@ npm publish ./zapsaang-dsh-web-bridge-0.1.0-alpha.1.tgz --tag alpha --access pub
 
 ### npm Trusted Publisher
 
-Once the package exists, configure the Trusted Publisher on the `@zapsaang/dsh-web-bridge` npm package for the next unpublished version: GitHub owner `zapsaang`, repository `dsh-web-bridge` (the npm scope and the repository name deliberately differ — the package is scoped, the repo is not), workflow filename `publish.yml`, environment `npm`; on new settings select **Allow npm publish** (stage-only is the default). A separate dist-tag permission exists but is neither needed nor granted for publishing with `--tag alpha`. An initial successful OIDC release must land within 2 days of configuration or it expires and must be recreated. See https://docs.npmjs.com/trusted-publishers/.
+Once the package exists, configure the Trusted Publisher on the `@zapsaang/dsh-web-bridge` npm package for the next unpublished version: GitHub owner `zapsaang`, repository `dsh-web-bridge` (the npm scope and the repository name deliberately differ — the package is scoped, the repo is not), workflow filename `publish.yml`, and an **empty** Environment field; on new settings select **Allow npm publish** (stage-only is the default). The workflow deliberately declares no `environment:`, so the two sides must stay consistent — naming an environment here that the job does not use (or the reverse) makes npm reject the OIDC exchange. A separate dist-tag permission exists but is neither needed nor granted for publishing with `--tag alpha`. An initial successful OIDC release must land within 2 days of configuration or it expires and must be recreated. See https://docs.npmjs.com/trusted-publishers/.
 
 ### Release workflow (`.github/workflows/publish.yml`)
 
-- Manual `workflow_dispatch` only (no tag or push trigger); the publish job additionally requires `refs/heads/main`. Inputs: `expected_version` (required, must match `package.json`, format `X.Y.Z-alpha.N`) and `publish` (boolean, default `false`).
+- Two triggers: pushing a tag named `v<version>` (for example `v0.1.0-alpha.2`) publishes automatically, and manual `workflow_dispatch` stays available. Dispatch inputs: `expected_version` (required, must match `package.json`, format `X.Y.Z-alpha.N`) and `publish` (boolean, default `false`). A tag trigger always publishes; a dispatch publishes only with `publish: true` on `refs/heads/main`.
+- The tag name is the single source of truth for the version. The version-resolution step strips an optional `v` prefix, exports it as `EXPECTED_VERSION`, and `scripts/check-release.mjs` then requires the ref to be either `refs/heads/main` or a tag naming exactly that version, plus a manifest carrying the same version. Tag-only glob filters (`v*`) are deliberate: Actions branch/tag filters are globs, not regexes, so the strict `X.Y.Z-alpha.N` check lives in the guard.
+
+```sh
+git switch main && git pull --ff-only
+git tag -a v0.1.0-alpha.2 -m "0.1.0-alpha.2"
+git push origin v0.1.0-alpha.2
+```
+
+- The tag must point at a commit that is already on `main`: `verify` re-checks ancestry with `git merge-base --is-ancestor` against `origin/main`, which is why its checkout uses `fetch-depth: 0`. It must also contain the workflow file you intend to run — a tag on an older commit runs that commit's workflow revision.
+- Keep the trigger in `publish.yml`. The npm Trusted Publisher is bound to that workflow **filename** (plus its empty environment field), so a second workflow file would require reconfiguring the publisher (and an initial OIDC publish within 2 days of that change).
 - Job `verify`: full gates (typecheck/build/default tests plus the explicit compiled DSH and browser suites), project-pinned Chromium install, real `npm pack` and tarball inspection, `npm publish <tarball> --dry-run`, uploads the tarball as an artifact.
-- Job `publish`: only when `publish: true`; GitHub Environment `npm` (protect it: main-only, required reviewers); permissions `contents: read, id-token: write`; OIDC Trusted Publisher authentication, no `NPM_TOKEN`. Publishes the exact verified tarball artifact (checksum re-verified), never a rebuild.
+- Job `publish`: runs when the trigger is a tag, or when a dispatch passes `publish: true` on `main`; permissions `contents: read, id-token: write`; OIDC Trusted Publisher authentication, no `NPM_TOKEN`. Publishes the exact verified tarball artifact (checksum re-verified), never a rebuild.
+- There is no GitHub Environment, so a tag push publishes **unattended** — no approval step, matching the tag-triggered OIDC setup in the other `zapsaang` npm packages. The gates on this path are the deliberate tag push itself, job `verify`, and the release guard's requirement that the tag name equals the reviewed `package.json` version. Restoring a required-reviewer gate means re-adding `environment: npm` here, setting the same environment in the npm Trusted Publisher config, and allowing the `v*` tag pattern under that environment's "Deployment branches and tags" — a `main`-only rule there blocks a tag-triggered job before OIDC runs.
 - Automatic provenance applies only when **both** the GitHub repository and the npm package are public.
 - After an authorized publish, verify separately, e.g. for `0.1.0-alpha.2`:
 

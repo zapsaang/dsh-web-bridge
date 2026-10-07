@@ -3,10 +3,14 @@ import { execFileSync } from 'node:child_process';
 import { readFileSync, readdirSync } from 'node:fs';
 import { resolve } from 'node:path';
 
-assert.equal(process.env.GITHUB_REF, 'refs/heads/main', 'release ref must be main');
 const expected = process.env.EXPECTED_VERSION;
 assert.ok(typeof expected === 'string' && /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)-alpha\.(0|[1-9]\d*)$/.test(expected),
   'expected version must be X.Y.Z-alpha.N without leading zeros');
+
+const ref = process.env.GITHUB_REF ?? '';
+const tag = ref.startsWith('refs/tags/') ? ref.slice('refs/tags/'.length) : null;
+assert.ok(ref === 'refs/heads/main' || (tag !== null && (tag === expected || tag === `v${expected}`)),
+  'release ref must be main or a tag naming the released version');
 
 const args = process.argv.slice(2);
 let source;
