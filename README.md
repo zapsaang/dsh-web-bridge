@@ -1,8 +1,10 @@
 # dsh-web-bridge
 
+> **Status: experimental alpha.** The pinned alpha peers below are a compatibility proposal, not a support claim, and several deployment verification gates are NOT RUN or PARTIAL — see "Deployment verification gates" before treating any of this as supported.
+
 Unix-socket session bridge that puts a [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (DSH) Web GUI behind Cloudflare Access. The bridge is a Cordis plugin that runs inside the DSH process, listens only on a Unix domain socket, and performs the loopback token exchange on behalf of browsers that arrive through the tunnel — so launch tokens never leave the local machine and never appear in a remote URL, log, or address bar.
 
-Authoritative specification: `docs/dsh-web-bridge-design.md` (section references below, e.g. §12.1, point into that document).
+Authoritative specification: [`docs/dsh-web-bridge-design.md`](https://github.com/zapsaang/dsh-web-bridge/blob/main/docs/dsh-web-bridge-design.md) (section references below, e.g. §12.1, point into that document). The `docs/` and `examples/` paths referenced throughout this README are repository paths; they are not shipped inside the npm tarball, so browse them on GitHub.
 
 ## Installation
 
@@ -63,7 +65,7 @@ The `connection` row is left untouched; it inherits the merged `trustedHosts` th
 
 ## Cloudflare Access configuration
 
-Topology (full example in `examples/cloudflared.yml`, §12.2): cloudflared terminates TLS and Access, then connects to the bridge over the Unix socket. Each public hostname gets its own ingress rule with its own Access application audience tag:
+Topology (full example in [`examples/cloudflared.yml`](https://github.com/zapsaang/dsh-web-bridge/blob/main/examples/cloudflared.yml), §12.2): cloudflared terminates TLS and Access, then connects to the bridge over the Unix socket. Each public hostname gets its own ingress rule with its own Access application audience tag:
 
 ```yaml
 ingress:
@@ -100,7 +102,7 @@ At startup the bridge cross-checks that every configured authority is a bare (po
 
 ## tmpfiles and directory permissions
 
-`examples/dsh-web.tmpfiles.conf` (§12.3):
+[`examples/dsh-web.tmpfiles.conf`](https://github.com/zapsaang/dsh-web-bridge/blob/main/examples/dsh-web.tmpfiles.conf) (§12.3):
 
 ```ini
 # /etc/tmpfiles.d/dsh-web.conf
@@ -161,3 +163,72 @@ Forbidden — must never appear in any log: tokens, tokenized URLs, cookie value
 - The full **24-hour** T-H15 soak remains a future run and is NOT RUN (user-scoped decision: shortened 2 h accepted for this delivery).
 - Harness note: the original soak harness lacked teardown for persistent SSE/WS/slow-reader connections and hung after the duration elapsed; fixed (in-flight registry + bounded shutdown) and re-verified — both the SIGTERM path and the duration path now exit 0 with a summary event.
 - T-H14b (other-UID DAC denial) passes under root; it is a permanent test that skips in non-privileged environments where `setpriv` cannot drop to a foreign UID.
+
+## Publishing
+
+Maintainer instructions, not a record of completed actions. If the package does not yet exist on the registry, the first publication bootstraps it via maintainer `npm login` + 2FA (below); later releases use the workflow below. Published versions are immutable; every fix needs a new version — current `0.1.0-alpha.1`, next new version e.g. `0.1.0-alpha.2`. README changes only reach the npm page if they land before packing/publishing that version.
+
+### Toolchain
+
+- Node `24.21.0`, npm `>=11.5.1`, pnpm `12.9.1` (development via corepack); Linux with the `flock` and `tar` system tools.
+- Frozen install: `corepack pnpm install --frozen-lockfile`.
+- Tests that bind a private `XDG_RUNTIME_DIR` need a private directory under `$HOME` (trusted ancestors), not `/tmp`:
+
+```sh
+umask 077
+export XDG_RUNTIME_DIR="$(mktemp -d "$HOME/.dsh-test.XXXXXX")"
+```
+
+### Local release gate (all green before packing)
+
+```sh
+corepack pnpm run typecheck && corepack pnpm run build && corepack pnpm run test
+node --test .test-dist/test/dsh/*.test.js
+corepack pnpm exec playwright install chromium   # project-pinned Chromium, before browser tests
+node --test .test-dist/test/browser/*.test.js
+node scripts/check-pack-files.mjs                # pack allowlist check
+```
+
+`prepack` runs `npm run build` as the pack gate, so `npm pack`/`npm publish` do not require pnpm on PATH.
+
+### Pack, inspect, dry-run
+
+```sh
+npm pack                                              # real tarball
+tar -tzf ./dsh-web-bridge-0.1.0-alpha.1.tgz           # inspect contents
+npm publish ./dsh-web-bridge-0.1.0-alpha.1.tgz --dry-run --tag alpha --access public --registry https://registry.npmjs.org/
+```
+
+Do not pass `--provenance` locally; provenance comes from CI OIDC only, and a dry run is not proof of authentication or provenance. Per the npm docs, a relative tarball/folder package-spec must begin with an explicit `./` prefix; absolute paths are also accepted.
+
+### First publication (bootstrap, example — not executed)
+
+If the package does not yet exist on the registry, the maintainer bootstraps it once with an interactive login (2FA) and an explicit tarball publish:
+
+```sh
+npm login --registry=https://registry.npmjs.org/
+npm publish ./dsh-web-bridge-0.1.0-alpha.1.tgz --tag alpha --access public --registry https://registry.npmjs.org/
+```
+
+### npm Trusted Publisher
+
+Once the package exists, configure the Trusted Publisher for the next unpublished version: owner `zapsaang`, repo `dsh-web-bridge`, workflow filename `publish.yml`, environment `npm`; on new settings select **Allow npm publish** (stage-only is the default). A separate dist-tag permission exists but is neither needed nor granted for publishing with `--tag alpha`. An initial successful OIDC release must land within 2 days of configuration or it expires and must be recreated. See https://docs.npmjs.com/trusted-publishers/.
+
+### Release workflow (`.github/workflows/publish.yml`)
+
+- Manual `workflow_dispatch` only (no tag or push trigger); the publish job additionally requires `refs/heads/main`. Inputs: `expected_version` (required, must match `package.json`, format `X.Y.Z-alpha.N`) and `publish` (boolean, default `false`).
+- Job `verify`: full gates (typecheck/build/default tests plus the explicit compiled DSH and browser suites), project-pinned Chromium install, real `npm pack` and tarball inspection, `npm publish <tarball> --dry-run`, uploads the tarball as an artifact.
+- Job `publish`: only when `publish: true`; GitHub Environment `npm` (protect it: main-only, required reviewers); permissions `contents: read, id-token: write`; OIDC Trusted Publisher authentication, no `NPM_TOKEN`. Publishes the exact verified tarball artifact (checksum re-verified), never a rebuild.
+- Automatic provenance applies only when **both** the GitHub repository and the npm package are public.
+- After an authorized publish, verify separately, e.g. for `0.1.0-alpha.2`:
+
+```sh
+npm view dsh-web-bridge@0.1.0-alpha.2 version dist.attestations --json
+npm view dsh-web-bridge dist-tags --json
+```
+
+  and inspect the version page (https://www.npmjs.com/package/dsh-web-bridge/v/0.1.0-alpha.2) for the provenance indicator.
+
+### Installing from npm
+
+Check what actually exists: `npm view dsh-web-bridge dist-tags --json`. Prefer explicit versions (`dsh-web-bridge@0.1.0-alpha.1`) or `@alpha`; on a first publication the tag layout can vary, so inspect the registry rather than assuming `latest` exists or that `alpha` can never point at the newest version. There is no promotion-to-`latest` workflow.
