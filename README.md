@@ -199,7 +199,7 @@ node scripts/check-pack-files.mjs                # pack allowlist check
 
 `prepack` runs `npm run build` as the pack gate, so `npm pack`/`npm publish` do not require pnpm on PATH.
 
-Last verified locally (2026-10-07; macOS 15.7.9, Node 24.21.0, util-linux `flock` 2.42.4): `typecheck` and `build` clean; default gate 422 tests → 421 pass, 0 fail, 1 skipped; DSH suite 60/60; browser suite 7/7; `check-pack-files.mjs` PASS (18 packed files). The single skip is T-H14b, which needs `setpriv` to drop to a foreign UID. The `flock` dependency is the one environment prerequisite that is easy to miss: without it the whole lease layer fails with `ERR_BRIDGE_LEASE_FLOCK` rather than a clear "tool missing" message.
+Last verified locally (2026-10-07; macOS 15.7.9, Node 24.21.0, util-linux `flock` 2.42.4): `typecheck` and `build` clean; default gate 423 tests → 422 pass, 0 fail, 1 skipped; DSH suite 60/60; browser suite 7/7; `check-pack-files.mjs` PASS (18 packed files). The single skip is T-H14b, which needs `setpriv` to drop to a foreign UID. The `flock` dependency is the one environment prerequisite that is easy to miss: without it the whole lease layer fails with `ERR_BRIDGE_LEASE_FLOCK` rather than a clear "tool missing" message.
 
 ### Pack, inspect, dry-run
 

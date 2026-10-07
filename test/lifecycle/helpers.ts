@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
+import type { Stats } from 'node:fs';
 import { createServer, request, type Server } from 'node:http';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -17,6 +18,16 @@ export async function tempDir(): Promise<string> {
 
 export async function cleanup(dir: string): Promise<void> {
   await rm(dir, { recursive: true, force: true });
+}
+
+/**
+ * Whether the path now points at a file created after `before`. Inode numbers
+ * cannot prove this: the kernel may hand the number an unlink just released
+ * straight back, so a legitimate rebind can keep it (overlayfs does exactly
+ * that). Creation time always moves forward.
+ */
+export function isFreshBind(before: Stats, after: Stats): boolean {
+  return after.ctimeMs > before.ctimeMs;
 }
 
 export function responder(): Server {
