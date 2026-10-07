@@ -1,0 +1,9 @@
+import './lifecycle/T-L1.test.js';
+import './lifecycle/T-L2.test.js';
+import './lifecycle/T-L3.test.js';
+import './lifecycle/T-L4.test.js';
+import './lifecycle/T-L5.test.js';
+import './lifecycle/T-L6.test.js';
+import './lifecycle/T-L7.test.js';
+import './lifecycle/T-L8.test.js';
+import './lifecycle/T-L9.test.js';
