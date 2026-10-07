@@ -42,6 +42,9 @@ test('T-L7c: pre-existing lock with wrong mode or owner fails closed', async (t)
   t.after(() => cleanup(dir));
   const socketPath = join(dir, 'bridge.sock');
   await writeFile(`${socketPath}.lock`, '', { mode: 0o644 });
+  // The ambient umask masks creation modes, so set the lax mode explicitly:
+  // this test needs a genuinely wrong-mode lock, not whatever the shell allows.
+  await chmod(`${socketPath}.lock`, 0o644);
 
   await assert.rejects(
     acquire(socketPath, responder(), new AbortController().signal),
@@ -54,6 +57,9 @@ test('T-L7d: parent directory must be euid-owned without group/other access', as
   t.after(() => cleanup(dir));
   const lax = join(dir, 'lax');
   await mkdir(lax, { mode: 0o755 });
+  // As above: the ambient umask masks creation modes, so force the group/other
+  // access this test is about instead of relying on the shell's umask.
+  await chmod(lax, 0o755);
 
   await assert.rejects(
     acquire(join(lax, 'bridge.sock'), responder(), new AbortController().signal),
