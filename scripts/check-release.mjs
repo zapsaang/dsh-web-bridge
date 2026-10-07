@@ -29,7 +29,7 @@ if (args[0] === '--pack-dir') {
 
 const manifest = JSON.parse(source);
 assert.ok(manifest !== null && typeof manifest === 'object' && !Array.isArray(manifest), 'manifest must be an object');
-assert.equal(manifest.name, 'dsh-web-bridge', 'release identity mismatch');
+assert.equal(manifest.name, '@zapsaang/dsh-web-bridge', 'release identity mismatch');
 assert.equal(manifest.version, expected, 'release version mismatch');
 assert.equal(manifest.publishConfig?.access, 'public', 'publishConfig.access must be public');
 assert.equal(manifest.publishConfig?.tag, 'alpha', 'publishConfig.tag must be alpha');

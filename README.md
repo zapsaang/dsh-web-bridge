@@ -1,4 +1,4 @@
-# dsh-web-bridge
+# @zapsaang/dsh-web-bridge
 
 > **Status: experimental alpha.** The pinned alpha peers below are a compatibility proposal, not a support claim, and several deployment verification gates are NOT RUN or PARTIAL — see "Deployment verification gates" before treating any of this as supported.
 
@@ -21,7 +21,7 @@ Runtime: Node `>=24.21.0 <25` plus the util-linux `flock` system tool.
 Install into the web profile (the CLI forwards the remaining arguments to pnpm inside the profile directory, §10.3):
 
 ```sh
-dsh plugin --profile web add dsh-web-bridge@0.1.0-alpha.1
+dsh plugin --profile web add @zapsaang/dsh-web-bridge@0.1.0-alpha.1
 ```
 
 **Activation mechanism.** The package's `package.json` carries `dsh.bundle.patch: ["./cordis.patch.yml"]`; the profile loader (`bundlePatchPaths`) reads that metadata and applies the shipped patch as one bundle layer. The patch is a single append-mode `insert` row:
@@ -29,7 +29,7 @@ dsh plugin --profile web add dsh-web-bridge@0.1.0-alpha.1
 ```yaml
 - insert:
     - id: dsh-web-bridge
-      name: dsh-web-bridge
+      name: '@zapsaang/dsh-web-bridge'
       inject: [connection, webServer, webRuntime]
       config:
         socketPath: /run/dsh-web/session-bridge.sock
@@ -168,6 +168,8 @@ Forbidden — must never appear in any log: tokens, tokenized URLs, cookie value
 
 Maintainer instructions, not a record of completed actions. If the package does not yet exist on the registry, the first publication bootstraps it via maintainer `npm login` + 2FA (below); later releases use the workflow below. Published versions are immutable; every fix needs a new version — current `0.1.0-alpha.1`, next new version e.g. `0.1.0-alpha.2`. README changes only reach the npm page if they land before packing/publishing that version.
 
+The published name is **scoped** (`@zapsaang/dsh-web-bridge`). npm rejects the unscoped `dsh-web-bridge` with a 403 because it is too similar to the existing `dsh-webbridge` package, and that similarity check cannot be appealed — so do not "simplify" the name back to unscoped. The scope is also part of the Cordis load contract: the profile loader resolves the patch row's `name` as a bare module specifier, so `package.json`, `cordis.patch.yml`, and the plugin's exported `name` must always move together. The unscoped name has never been published; the first publication creates `@zapsaang/dsh-web-bridge`.
+
 ### Toolchain
 
 - Node `24.21.0`, npm `>=11.5.1`, pnpm `12.9.1` (development via corepack); Linux with the `flock` and `tar` system tools.
@@ -195,11 +197,13 @@ node scripts/check-pack-files.mjs                # pack allowlist check
 
 ```sh
 npm pack                                              # real tarball
-tar -tzf ./dsh-web-bridge-0.1.0-alpha.1.tgz           # inspect contents
-npm publish ./dsh-web-bridge-0.1.0-alpha.1.tgz --dry-run --tag alpha --access public --registry https://registry.npmjs.org/
+tar -tzf ./zapsaang-dsh-web-bridge-0.1.0-alpha.1.tgz  # inspect contents
+npm publish ./zapsaang-dsh-web-bridge-0.1.0-alpha.1.tgz --dry-run --tag alpha --access public --registry https://registry.npmjs.org/
 ```
 
 Do not pass `--provenance` locally; provenance comes from CI OIDC only, and a dry run is not proof of authentication or provenance. Per the npm docs, a relative tarball/folder package-spec must begin with an explicit `./` prefix; absolute paths are also accepted.
+
+A scoped package packs under a **flattened** filename — npm drops the leading `@` and turns the scope separator into a dash — so `@zapsaang/dsh-web-bridge` produces `zapsaang-dsh-web-bridge-<version>.tgz`.
 
 ### First publication (bootstrap, example — not executed)
 
@@ -207,12 +211,12 @@ If the package does not yet exist on the registry, the maintainer bootstraps it 
 
 ```sh
 npm login --registry=https://registry.npmjs.org/
-npm publish ./dsh-web-bridge-0.1.0-alpha.1.tgz --tag alpha --access public --registry https://registry.npmjs.org/
+npm publish ./zapsaang-dsh-web-bridge-0.1.0-alpha.1.tgz --tag alpha --access public --registry https://registry.npmjs.org/
 ```
 
 ### npm Trusted Publisher
 
-Once the package exists, configure the Trusted Publisher for the next unpublished version: owner `zapsaang`, repo `dsh-web-bridge`, workflow filename `publish.yml`, environment `npm`; on new settings select **Allow npm publish** (stage-only is the default). A separate dist-tag permission exists but is neither needed nor granted for publishing with `--tag alpha`. An initial successful OIDC release must land within 2 days of configuration or it expires and must be recreated. See https://docs.npmjs.com/trusted-publishers/.
+Once the package exists, configure the Trusted Publisher on the `@zapsaang/dsh-web-bridge` npm package for the next unpublished version: GitHub owner `zapsaang`, repository `dsh-web-bridge` (the npm scope and the repository name deliberately differ — the package is scoped, the repo is not), workflow filename `publish.yml`, environment `npm`; on new settings select **Allow npm publish** (stage-only is the default). A separate dist-tag permission exists but is neither needed nor granted for publishing with `--tag alpha`. An initial successful OIDC release must land within 2 days of configuration or it expires and must be recreated. See https://docs.npmjs.com/trusted-publishers/.
 
 ### Release workflow (`.github/workflows/publish.yml`)
 
@@ -223,12 +227,12 @@ Once the package exists, configure the Trusted Publisher for the next unpublishe
 - After an authorized publish, verify separately, e.g. for `0.1.0-alpha.2`:
 
 ```sh
-npm view dsh-web-bridge@0.1.0-alpha.2 version dist.attestations --json
-npm view dsh-web-bridge dist-tags --json
+npm view @zapsaang/dsh-web-bridge@0.1.0-alpha.2 version dist.attestations --json
+npm view @zapsaang/dsh-web-bridge dist-tags --json
 ```
 
-  and inspect the version page (https://www.npmjs.com/package/dsh-web-bridge/v/0.1.0-alpha.2) for the provenance indicator.
+  and inspect the version page (https://www.npmjs.com/package/@zapsaang/dsh-web-bridge/v/0.1.0-alpha.2) for the provenance indicator.
 
 ### Installing from npm
 
-Check what actually exists: `npm view dsh-web-bridge dist-tags --json`. Prefer explicit versions (`dsh-web-bridge@0.1.0-alpha.1`) or `@alpha`; on a first publication the tag layout can vary, so inspect the registry rather than assuming `latest` exists or that `alpha` can never point at the newest version. There is no promotion-to-`latest` workflow.
+Check what actually exists: `npm view @zapsaang/dsh-web-bridge dist-tags --json`. Prefer explicit versions (`@zapsaang/dsh-web-bridge@0.1.0-alpha.1`) or `@alpha`; on a first publication the tag layout can vary, so inspect the registry rather than assuming `latest` exists or that `alpha` can never point at the newest version. There is no promotion-to-`latest` workflow.

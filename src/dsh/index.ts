@@ -4,7 +4,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'node:ht
 import { acquire } from '../lib/socket.js';
 import { handleCheckContinue, handleRequest, handleUpgrade, type BridgeRuntime } from '../lib/bridge.js';
 
-export const name = 'dsh-web-bridge';
+export const name = '@zapsaang/dsh-web-bridge';
 export const inject = ['connection', 'webServer', 'webRuntime'];
 
 export interface Config {

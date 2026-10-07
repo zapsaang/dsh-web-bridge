@@ -1,5 +1,5 @@
 {
-  "name": "dsh-web-bridge",
+  "name": "@zapsaang/dsh-web-bridge",
   "version": "0.1.0-alpha.1",
   "description": "Unix-socket session bridge for DeepSeek Harness behind Cloudflare Access, packaged as a Cordis plugin.",
   "license": "MIT",

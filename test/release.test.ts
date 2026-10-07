@@ -8,7 +8,7 @@ import { test } from 'node:test';
 const guard = resolve('scripts/check-release.mjs');
 const version = '0.1.0-alpha.1';
 const manifest = {
-  name: 'dsh-web-bridge', version,
+  name: '@zapsaang/dsh-web-bridge', version,
   publishConfig: { access: 'public', tag: 'alpha', registry: 'https://registry.npmjs.org/' },
 } as const;
 

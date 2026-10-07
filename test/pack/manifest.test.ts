@@ -48,7 +48,7 @@ test('T-P4: exports resolve to the built plugin entry and its declaration', asyn
   const plugin: unknown = await import(new URL('../../../lib/dsh/index.js', import.meta.url).href);
   assert.ok(typeof plugin === 'object' && plugin !== null);
   const surface = plugin as Record<string, unknown>;
-  assert.equal(surface['name'], 'dsh-web-bridge');
+  assert.equal(surface['name'], '@zapsaang/dsh-web-bridge');
   assert.deepEqual(surface['inject'], ['connection', 'webServer', 'webRuntime']);
   assert.equal(typeof surface['Config'], 'function');
   assert.equal(typeof surface['apply'], 'function');

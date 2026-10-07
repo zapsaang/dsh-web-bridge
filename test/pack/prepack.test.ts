@@ -36,7 +36,12 @@ test('npm pack builds through prepack when pnpm is unavailable', (t) => {
   assert.ok(existsSync(join(dir, 'lib/dsh/index.d.ts')));
   const manifest: unknown = JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8'));
   assert.ok(typeof manifest === 'object' && manifest !== null && 'name' in manifest && 'version' in manifest);
-  const tarball = join(dir, `${manifest.name}-${manifest.version}.tgz`);
+  const { name, version } = manifest as { name: unknown; version: unknown };
+  assert.ok(typeof name === 'string' && typeof version === 'string', 'manifest carries a string name and version');
+  // npm strips the leading '@' and flattens the scope separator in the tarball
+  // filename, so '@scope/name' packs as 'scope-name-<version>.tgz'.
+  const packedName = name.replace(/^@/, '').replace('/', '-');
+  const tarball = join(dir, `${packedName}-${version}.tgz`);
   const listing = spawnSync('tar', ['-tzf', tarball], { encoding: 'utf8', timeout: 10_000 });
   assert.equal(listing.status, 0, listing.stderr);
   const files = listing.stdout.trim().split('\n');
