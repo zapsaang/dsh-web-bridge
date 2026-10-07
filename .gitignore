@@ -9,3 +9,4 @@ node_modules/
 .test-dist-browser/
 soak-*.jsonl
 soak-*.out
+/*.tgz
