@@ -1,0 +1,7 @@
+# Scaffold checks do not execute native/third-party dependency build scripts.
+allowBuilds:
+  '@deepseek-ai/dsh-subprocess-local': false
+  '@google/genai': false
+  koffi: false
+  node-pty: false
+  protobufjs: false

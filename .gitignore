@@ -1,0 +1,11 @@
+node_modules/
+/lib/
+.test-dist/
+.test-dist-probes/
+.test-dist-slice1/
+.test-dist-slice3/
+.test-dist-red/
+.test-dist-soak/
+.test-dist-browser/
+soak-*.jsonl
+soak-*.out
