@@ -5,10 +5,15 @@ import { connect } from 'node:net';
 import { acquire, defaultIo, dispose, type LeaseIo, type LeaseServer } from '../../src/lib/socket.js';
 import { facade, failure, kernelLock, observedIo, quarantine } from './shutdown-fixture-support.js';
 import { runPendingScenario } from './shutdown-pending-scenarios.js';
+import { runLockCancellation } from './shutdown-lock-cancellation.js';
 
 export async function runShutdownScenario(scenario: string, dir: string): Promise<void> {
   const path = `${dir}/bridge.sock`;
   switch (scenario) {
+    case 'sync-lock-path-abort':
+    case 'sync-lock-handle-abort':
+      await runLockCancellation(scenario, dir);
+      return;
     case 'close-hang-not-listening':
     case 'quarantine-hang': {
       // Given: a real listener behind a facade whose flag falls before its callback.
