@@ -6,10 +6,17 @@ import { acquire, defaultIo, dispose, type LeaseIo, type LeaseServer } from '../
 import { facade, failure, kernelLock, observedIo, quarantine } from './shutdown-fixture-support.js';
 import { runPendingScenario } from './shutdown-pending-scenarios.js';
 import { runLockCancellation } from './shutdown-lock-cancellation.js';
+import { runAliasScenario } from './shutdown-alias-scenarios.js';
 
 export async function runShutdownScenario(scenario: string, dir: string): Promise<void> {
   const path = `${dir}/bridge.sock`;
   switch (scenario) {
+    case 'pending-open-alias-double-slash':
+    case 'pending-open-alias-dot':
+    case 'pending-open-alias-double-slash-reverse':
+    case 'pending-open-alias-dot-reverse':
+      await runAliasScenario(scenario, dir);
+      return;
     case 'sync-lock-path-abort':
     case 'sync-lock-handle-abort':
       await runLockCancellation(scenario, dir);

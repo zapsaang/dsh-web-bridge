@@ -10,6 +10,8 @@ for (const scenario of [
   'pending-open', 'pending-open-sync-abort', 'pending-lock-stat', 'pending-lock-path-stat', 'pending-initial-stat',
   'pending-probe', 'pending-stale-unlink', 'pending-bound-stat', 'pending-final-stat',
   'pending-residual-stat', 'pending-residual-unlink', 'pending-helper-reap',
+  'pending-open-alias-double-slash', 'pending-open-alias-dot',
+  'pending-open-alias-double-slash-reverse', 'pending-open-alias-dot-reverse',
 ]) {
   test(`5: shutdown owner ${scenario}`, { timeout: 10000 }, async (t) => {
     // Given: each quarantine fixture owns an isolated directory/process.
