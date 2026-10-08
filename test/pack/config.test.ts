@@ -15,7 +15,11 @@ test('configuration supplies the socket default when authorities are provided', 
   // When
   const output = Config(input);
   // Then
-  assert.deepEqual(output, { socketPath: '/run/dsh-web/session-bridge.sock', authorities: input.authorities });
+  assert.deepEqual(output, {
+    socketPath: '/run/dsh-web/session-bridge.sock',
+    authorities: input.authorities,
+    socketAccess: 'strict',
+  });
 });
 
 for (const authorities of [undefined, [], [''], ['Dsh.example.com'], ['127.0.0.1'], ['dsh.example.com:443'], ['*.example.com']]) {

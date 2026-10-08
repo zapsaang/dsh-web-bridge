@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { lstat } from 'node:fs/promises';
+import { chmod, chown, mkdir } from 'node:fs/promises';
 import { connect } from 'node:net';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -53,8 +54,7 @@ test('T-P3: resolved plugin readiness implies a bound 0600 socket owned by the b
   assert.equal(probe.status, 403, 'bridge authority verdict answers on the UDS (default host is untrusted)');
 });
 
-test('T-P3: upgrade denials are plain HTTP errors and never block readiness', async (t) => {
-  // Given
+test('T-P3: upgrade denials are plain HTTP errors and never block readiness', async (t) => {  // Given
   const dir = await tempDir();
   t.after(() => cleanup(dir));
   const socketPath = join(dir, 'bridge.sock');
@@ -73,4 +73,37 @@ test('T-P3: upgrade denials are plain HTTP errors and never block readiness', as
   });
   // Then
   assert.match(malformed.split('\r\n', 1)[0] ?? '', /^HTTP\/1\.1 400 /, 'malformed handshake denied, no 101');
+});
+
+test('T-P3 group: resolved plugin readiness implies a 0660 socket carrying the parent GID', async (t) => {
+  // Given: a real group-mode parent (setgid 02710, shared supplementary group != egid)
+  const egid = process.getegid?.() ?? 0;
+  const gid = process.getgroups?.().find((group) => group !== egid);
+  if (gid === undefined) {
+    t.skip('no supplementary group distinct from EGID; cannot chgrp the group-mode parent fixture');
+    return;
+  }
+  const root = await tempDir();
+  t.after(() => cleanup(root));
+  const dir = join(root, 'shared');
+  await mkdir(dir);
+  await chown(dir, process.geteuid?.() ?? 0, gid);
+  await chmod(dir, 0o2710);
+  const socketPath = join(dir, 'bridge.sock');
+  // When
+  const ctx = new Context();
+  ctx.provide('webServer', { host: '127.0.0.1', port: 18777 });
+  ctx.provide('connection', { authenticatedUrl: () => 'http://127.0.0.1/' });
+  ctx.provide('webRuntime', { trustedHosts: ['probe-p3.example.test'] });
+  const fiber = await ctx.plugin(bridge, { socketPath, authorities: ['probe-p3.example.test'], socketAccess: 'group' });
+  await fiber.await();
+  t.after(() => ctx.fiber.dispose());
+  // Then
+  const stat = await lstat(socketPath);
+  assert.ok(stat.isSocket(), 'listener exists once readiness resolves');
+  assert.equal(stat.mode & 0o777, 0o660, 'group socket mode 0660');
+  assert.equal(stat.gid, gid, 'socket GID inherited from the setgid parent');
+  assert.notEqual(stat.gid, egid, 'inherited GID is not the process EGID');
+  const probe = await requestOverSocket(socketPath, '/');
+  assert.equal(probe.status, 403, 'bridge authority verdict answers on the UDS (default host is untrusted)');
 });

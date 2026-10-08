@@ -58,6 +58,7 @@ test('T-P1a: pinned overlay parses as a single append-mode insert of the bridge 
   assert.deepEqual(normalized, {
     socketPath: row.config['socketPath'],
     authorities: row.config['authorities'],
+    socketAccess: 'strict',
   });
   for (const authority of normalized.authorities) {
     assert.ok(!authority.includes(':'), `${authority} is a bare name without a port`);
