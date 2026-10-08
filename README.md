@@ -36,6 +36,22 @@ dsh plugin --profile web add @zapsaang/dsh-web-bridge@0.1.0-alpha.1
         authorities: [dsh.example.com, dsh2.example.com]
 ```
 
+The shipped bundle intentionally keeps exactly two config keys (`socketPath`, `authorities`). Omitting `socketAccess` selects the default **strict** socket mode; the raw bundle does not carry the key.
+
+**Group mode (opt-in, local overlay only).** Shared-group socket access is **implemented in this working tree**, and functional same-UID tests pass, but this implementation has **not been published**. Privileged Linux cross-UID acceptance (A7-A9) remains **BLOCKED**, and deployment verification (A10) is **NOT RUN**; see "tmpfiles and directory permissions" below. To provision for it, the deployment adds its own overlay row that restates the bridge config with the explicit third key:
+
+```yaml
+- id: dsh-web-bridge
+  name: '@zapsaang/dsh-web-bridge'
+  inject: [connection, webServer, webRuntime]
+  config:
+    socketPath: /run/dsh-web/session-bridge.sock
+    socketAccess: group
+    authorities: [dsh.example.com, dsh2.example.com]
+```
+
+The overlay only takes effect together with the matching group-mode tmpfiles line; enabling one without the other fails closed at startup.
+
 Installing the package is not the same as enabling it: CLI bundle selection comes from the plugin-manager reconcile — a newly added bundle with `dsh.bundle` metadata is selected by default, an already-installed-but-disabled dependency is **not** re-enabled, and a package without `dsh.bundle` metadata stays a plain dependency (§10.3). A live process is not readiness; see "Readiness" below.
 
 **DSH-side overlay.** The deployment must also restate the webserver / web-runtime rows so the DSH web server stays on loopback and never prints a tokenized URL (§12.1 — a patch replaces a row's whole config, so every owned key is restated):
@@ -102,15 +118,30 @@ At startup the bridge cross-checks that every configured authority is a bare (po
 
 ## tmpfiles and directory permissions
 
-[`examples/dsh-web.tmpfiles.conf`](https://github.com/zapsaang/dsh-web-bridge/blob/main/examples/dsh-web.tmpfiles.conf) (§12.3):
+[`examples/dsh-web.tmpfiles.conf`](https://github.com/zapsaang/dsh-web-bridge/blob/main/examples/dsh-web.tmpfiles.conf) (§12.3) carries one **active** directive and two commented, mutually exclusive alternatives for the same path:
 
 ```ini
 # /etc/tmpfiles.d/dsh-web.conf
 d /run/dsh-web 0700 dsh dsh -
+# group mode (opt-in; enable at most ONE of these, never alongside the strict line):
+# d /run/dsh-web 02710 dsh dsh-bridge -   # preferred: group traverse, no list
+# d /run/dsh-web 02750 dsh dsh-bridge -   # discovery: group may also list
 ```
 
-- Directory `0700` owned by the `dsh` user; the socket itself is `0600`. cloudflared runs as a root system service and can connect to the `dsh`-owned socket; no other-UID sharing scheme is introduced.
-- The `-` age field disables age-based cleanup. tmpfiles or systemd must never remove or replace the lock inode or its parent directory while any cooperating instance may be alive. If a unit uses `RuntimeDirectory`, set `RuntimeDirectoryPreserve=yes`; a failed competing unit stopping must not delete the active owner's inode. Operator cleanup is allowed only after confirming all instances have stopped.
+**Strict mode (default).** Directory `0700` owned by the `dsh` user; the socket itself is `0600` and the lock file is `0600`. cloudflared runs as a root system service and can connect to the `dsh`-owned socket; no other-UID sharing is active. Strict deployments may keep `0700`-owned ancestors anywhere on the path.
+
+**Group mode (opt-in, implemented locally; unpublished).** The operator pre-creates the directory as setgid `02710` (preferred: group members traverse but cannot list) or `02750` (discovery: group members may list), owner `dsh`, group a dedicated bridge group such as `dsh-bridge`. No group write, no permissions for others. The socket is created `0660` and inherits the directory GID through setgid; the lock stays `0600`, so group members can connect but cannot create, delete, or rename anything in the directory. Enabling group mode is two coordinated steps from one configuration owner: the `socketAccess: group` overlay row and the matching tmpfiles line (owner, group, path, mode). The plugin never creates, chowns, or chmods the directory itself, and never falls back if the predicates do not match. Mode `02750` is setgid, not sticky.
+
+- **Trust semantics.** Group membership equals full DSH Web access. Any process whose primary or supplementary groups hit the shared group can reach the socket, trigger bootstrap, and read real DSH `Set-Cookie` values; no Cloudflare or cloudflared needs to be present. `Host`, `Accept`, `Sec-Fetch-*`, `Cf-Access-Jwt-Assertion`, and `Authorization` headers are not local identity and grant no standing; the bridge adds no such check. Choose the directory group as the authorization decision and use a dedicated group per bridge so revocation and auditing stay cheap.
+- **Ancestors.** In group mode every ancestor on the socket path must be traversable by the connecting service accounts (for example an unprivileged cloudflared) with no group/other write. Private home directories and `/run/user/UID` roots block group peers and must not host the socket.
+- **Lock and age discipline.** The `-` age field disables age-based cleanup. tmpfiles or systemd must never remove, replace, truncate, or age-clean the lock inode or its parent directory while any cooperating instance may be alive. If a unit uses `RuntimeDirectory`, set `RuntimeDirectoryPreserve=yes`; a failed competing unit stopping must not delete the active owner's inode. There must be no competing owner or chmod manager for the same path. Operator cleanup is allowed only after confirming all instances have stopped.
+- **Mode switch.** Changing strict to group or back is never an online operation. Stop all cooperating instances (every bridge instance and every connector), change the config overlay and the tmpfiles owner/group/mode together, refresh the connecting services' credentials (primary group and supplementary groups), then do a full start. Cordis pending restart, update, and reload do not perform this switch.
+- **Shutdown quarantine.** A shutdown that hits its deadline or a close error enters quarantine: the lease is held, no retry or reset is attempted, and replacement is blocked until the entire process stops (the OS then reaps the fds). Plan a full process stop, not a plugin swap, after any quarantined shutdown error.
+- **Readiness.** Ready means the lease checks completed: verified directory, lock acquired, bind, chmod, re-check. Listening or a live pid is not readiness, and connections made before ready are not served.
+- **Revocation limits.** Removing a member from the group, or any DAC change, does not close existing open connections and does not revoke already issued DSH cookies. Treat connection draining and cookie revocation as separate operational steps.
+- **ACL stance (deployment gate).** Every layer of the path, the socket, and the lock must carry only the base `user::` / `group::` / `other::` ACL entries, which are equivalent to the mode. Named entries, mask-only entries, and default ACLs at any layer are unsupported. mode/gid alone cannot exclude mask or named entries, so inspect every layer plus the socket plus the lock, read-only, with `getfacl -p <path>` (`-p` retains the leading slash on absolute paths, not relative paths; `setfacl -m` modifies ACLs and is not an inspection command) together with `stat`. The plugin does not detect ACLs; this is operator-side only, checked before enabling group mode.
+- **Functional evidence (same UID only).** Fresh compiled configuration/group checks passed **24/24**, and readiness checks passed **27/27**. Independent real-server probes observed zero HTTP response bytes on all four pre-ready events at both chmod and final-stat barriers; after validation, navigation/API returned **200** and WebSocket upgrade returned **101**, with accepted-connection closure and the original successful native close callback observed on disposal. The public built `apply` with real pinned DSH passed native cookie bootstrap and protected `/api/native-probe` checks, **401 without a cookie / 200 with the issued cookie**, for omitted and explicit strict and both group directory modes (`02710`, `02750`). These same-UID results are **not cross-UID acceptance** or production ACL/credential evidence. The pinned DSH and browser regression suites passed **60/60** and **7/7**, respectively.
+- **Gate status (honest).** The formal Linux group gate is `scripts/check-socket-access-linux.mjs` (run with plain node, no test framework) together with `test/http/socket-access-linux.test.ts`; on CI it runs under an explicit `sudo` by the orchestrator and never edits groups or accounts automatically. The local formal command returned **exit 2**, `BLOCKED A7-A9: getfacl unavailable; A10 NOT RUN`. UID 1000 also cannot drop to a foreign UID (`setpriv` reports operation not permitted). A developer-privilege skip is a skip, not a formal PASS. Privileged cross-UID acceptance remains **BLOCKED**; deployment-side stat/ACL and connector credential-refresh verification (A10) and any production deployment are **NOT RUN**. The implemented group feature has not been published.
 
 ## Threat model (operational summary, §11)
 
@@ -120,7 +151,7 @@ Who owns which boundary:
 - **DSH** owns session-cookie signing and verification, the Host/Origin/Fetch-Metadata trust fence, and the token exchange endpoint. The bridge performs only structural cookie checks and appends `Secure` to DSH-issued cookies (I4, I13); it preserves raw `Host`, `Origin`, and fetch-metadata headers untouched (I5, I6).
 - **The bridge** owns: the Unix-socket listener (I8, I9), the authority list above, the loopback-only token exchange (launch tokens never leave the machine — I1/I2/I3), bootstrap HTML with a pinned-hash CSP, and hop-by-hop header filtering.
 
-Accepted local trust domains: a same-UID process and root are inside the trusted computing base (cooperative lease discipline only). The main remote residual risks are Access/tunnel misconfiguration and compromised Access accounts (mitigated by MFA/policy); revocation of already-upgraded WebSockets is not instant — see the §13.3 runbook.
+Accepted local trust domains: a same-UID process and root are inside the trusted computing base (cooperative lease discipline only). The implemented opt-in group mode extends that trust domain to every member of the shared bridge group, with no per-user or per-session isolation inside the group. The main remote residual risks are Access/tunnel misconfiguration and compromised Access accounts (mitigated by MFA/policy); revocation of already-upgraded WebSockets is not instant, see the §13.3 runbook.
 
 ## Deployment verification gates
 
@@ -131,7 +162,8 @@ Status of the §13 gates. "PASS (test layer)" means the behavior is pinned by an
 | V1 Host preservation | NOT RUN | Requires the bridge deployed behind a real cloudflared tunnel. Test-layer anchor: T-H1 (raw Host fidelity, PASS). |
 | V2 real Edge SSO | NOT RUN | Requires a real Edge Access policy and allowed/denied test identities with MFA. |
 | V3 / V-CF connector verifier | PASS (isolated harness) | Pinned cloudflared (`18cdfe0a6fc7b72a0702d255a1f984e776ce0498`) with an injected harness test driving the original `NewJWTValidator` against local synthetic JWKS: missing/wrong-aud → 403, any-of audience match → pass-through, forged/expired → verify error with zero origin hits. Negative control red first. |
-| V4 Unix DAC | PASS | T-H14a/T-H14b green under root: other-UID connect gets EACCES; the suite skips privilege dropping where `setpriv` is unavailable. T-P3 asserts socket mode `0600`. |
+| V4 Unix DAC (strict) | PASS | Strict mode only. T-H14a/T-H14b green under root: other-UID connect gets EACCES; the suite skips privilege dropping where `setpriv` is unavailable. T-P3 asserts socket mode `0600`. |
+| V4-group socket access | BLOCKED (cross-UID acceptance) | Group mode is implemented in this working tree and same-UID functional checks pass, but it has not been published. Formal Linux gate (`scripts/check-socket-access-linux.mjs` + `test/http/socket-access-linux.test.ts`, explicit sudo on CI) returned exit 2: `BLOCKED A7-A9: getfacl unavailable; A10 NOT RUN`. UID switching is also unavailable at UID 1000 (`setpriv` operation not permitted). A privilege skip is not a PASS; privileged A7-A9 must pass before feature publication. A10 deployment ACL/credential verification remains NOT RUN. |
 | V5 clean browser | NOT RUN | Requires an effective `printUrl: false` deployment and an incognito Access login end-to-end. Test-layer anchor: T-B layer with stub Access (PASS). |
 | V6 stale recovery | NOT RUN | Requires deployment-state cookie tampering / secret rotation. Test-layer anchors: T-DSH6, T-DSH10 against pinned DSH (PASS). |
 | V7 real-device browsers | NOT RUN | Requires physical iOS/Android (incl. PWA) and desktop dual-hostname plus loopback-direct regression. |
@@ -173,6 +205,7 @@ The published name is **scoped** (`@zapsaang/dsh-web-bridge`). npm rejects the u
 ### Toolchain
 
 - Node `24.21.0`, npm `>=11.5.1`, pnpm `12.9.1` (development via corepack); `tar` plus the util-linux `flock` binary.
+- The formal Linux A7-A9 gate also needs `getfacl` (ACL inspection) and util-linux `setpriv` (cross-UID/group probes), plus privileges sufficient to switch UID/GID and supplementary groups. These are Linux gate tools, not plugin dependencies; the gate does not install tools or change system groups/accounts.
 - The deployment target is Linux. The lease layer spawns the `flock(1)` helper, so the test suite needs it on `PATH`; on macOS it comes from Homebrew, which installs util-linux keg-only and therefore does **not** link `flock` into `PATH` for you:
 
 ```sh
@@ -190,16 +223,22 @@ export XDG_RUNTIME_DIR="$(mktemp -d "$HOME/.dsh-test.XXXXXX")"
 ### Local release gate (all green before packing)
 
 ```sh
+set -e                                          # any failed or BLOCKED gate stops before packing
 corepack pnpm run typecheck && corepack pnpm run build && corepack pnpm run test
 node --test .test-dist/test/dsh/*.test.js
 corepack pnpm exec playwright install chromium   # project-pinned Chromium, before browser tests
 node --test .test-dist/test/browser/*.test.js
+corepack pnpm exec tsc -p tsconfig.test.json --outDir .test-dist-linux
+node_path=$(node -p 'process.execPath')           # retain the pinned Node path across sudo
+sudo -- env PATH="$PATH" "$node_path" scripts/check-socket-access-linux.mjs  # privileged Linux A7-A9
 node scripts/check-pack-files.mjs                # pack allowlist check
 ```
 
+Run the formal entry on a privileged Linux runner before packing, not as a skipped developer test or a macOS substitute. **BLOCKED is nonzero (exit 2), never PASS**; assertion/runtime failures exit 1. Even a formal A7-A9 PASS leaves deployment A10 NOT RUN until the actual deployment's path ACLs and connector credentials are verified.
+
 `prepack` runs `npm run build` as the pack gate, so `npm pack`/`npm publish` do not require pnpm on PATH.
 
-Last verified locally (2026-10-07; macOS 15.7.9, Node 24.21.0, util-linux `flock` 2.42.4): `typecheck` and `build` clean; default gate 423 tests → 422 pass, 0 fail, 1 skipped; DSH suite 60/60; browser suite 7/7; `check-pack-files.mjs` PASS (18 packed files). The single skip is T-H14b, which needs `setpriv` to drop to a foreign UID. The `flock` dependency is the one environment prerequisite that is easy to miss: without it the whole lease layer fails with `ERR_BRIDGE_LEASE_FLOCK` rather than a clear "tool missing" message.
+Historical local baseline (2026-10-07; macOS 15.7.9, Node 24.21.0, util-linux `flock` 2.42.4), not current group-feature proof or a current release verdict: `typecheck` and `build` clean; default gate 423 tests → 422 pass, 0 fail, 1 skipped; DSH suite 60/60; browser suite 7/7; `check-pack-files.mjs` PASS (18 packed files). The single skip is T-H14b, which needs `setpriv` to drop to a foreign UID. The `flock` dependency is the one environment prerequisite that is easy to miss: without it the whole lease layer fails with `ERR_BRIDGE_LEASE_FLOCK` rather than a clear "tool missing" message.
 
 ### Pack, inspect, dry-run
 
@@ -239,7 +278,7 @@ git push origin v0.1.0-alpha.2
 
 - The tag must point at a commit that is already on `main`: `verify` re-checks ancestry with `git merge-base --is-ancestor` against `origin/main`, which is why its checkout uses `fetch-depth: 0`. It must also contain the workflow file you intend to run — a tag on an older commit runs that commit's workflow revision.
 - Keep the trigger in `publish.yml`. The npm Trusted Publisher is bound to that workflow **filename** (plus its empty environment field), so a second workflow file would require reconfiguring the publisher (and an initial OIDC publish within 2 days of that change).
-- Job `verify`: full gates (typecheck/build/default tests plus the explicit compiled DSH and browser suites), project-pinned Chromium install, real `npm pack` and tarball inspection, `npm publish <tarball> --dry-run`, uploads the tarball as an artifact.
+- Job `verify`: full gates (typecheck/build/default tests plus the explicit compiled DSH and browser suites), project-pinned Chromium install, and the compiled privileged formal Linux A7-A9 matrix via `sudo` with the pinned Node path, then real `npm pack` and tarball inspection, `npm publish <tarball> --dry-run`, uploads the tarball as an artifact. A BLOCKED formal gate stops the job before packing; deployment A10 is separate.
 - Job `publish`: runs when the trigger is a tag, or when a dispatch passes `publish: true` on `main`; permissions `contents: read, id-token: write`; OIDC Trusted Publisher authentication, no `NPM_TOKEN`. Publishes the exact verified tarball artifact (checksum re-verified), never a rebuild.
 - There is no GitHub Environment, so a tag push publishes **unattended** — no approval step, matching the tag-triggered OIDC setup in the other `zapsaang` npm packages. The gates on this path are the deliberate tag push itself, job `verify`, and the release guard's requirement that the tag name equals the reviewed `package.json` version. Restoring a required-reviewer gate means re-adding `environment: npm` here, setting the same environment in the npm Trusted Publisher config, and allowing the `v*` tag pattern under that environment's "Deployment branches and tags" — a `main`-only rule there blocks a tag-triggered job before OIDC runs.
 - Automatic provenance applies only when **both** the GitHub repository and the npm package are public.
