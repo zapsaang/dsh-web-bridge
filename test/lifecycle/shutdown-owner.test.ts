@@ -6,6 +6,9 @@ for (const scenario of [
   'close-hang-not-listening', 'close-callback-error', 'close-throw',
   'late-bind-past-deadline', 'chmod-hang-cancel', 'upgraded-ws-open',
   'bind-failure-release', 'close-not-running-error',
+  'pending-open', 'pending-open-sync-abort', 'pending-lock-stat', 'pending-lock-path-stat', 'pending-initial-stat',
+  'pending-probe', 'pending-stale-unlink', 'pending-bound-stat', 'pending-final-stat',
+  'pending-residual-stat', 'pending-residual-unlink', 'pending-helper-reap',
 ]) {
   test(`5: shutdown owner ${scenario}`, { timeout: 10000 }, async (t) => {
     // Given: each quarantine fixture owns an isolated directory/process.

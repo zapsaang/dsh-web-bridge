@@ -4,6 +4,7 @@ import { createServer } from 'node:http';
 import { connect } from 'node:net';
 import { acquire, defaultIo, dispose, type LeaseIo, type LeaseServer } from '../../src/lib/socket.js';
 import { facade, failure, kernelLock, observedIo, quarantine } from './shutdown-fixture-support.js';
+import { runPendingScenario } from './shutdown-pending-scenarios.js';
 
 export async function runShutdownScenario(scenario: string, dir: string): Promise<void> {
   const path = `${dir}/bridge.sock`;
@@ -154,5 +155,6 @@ export async function runShutdownScenario(scenario: string, dir: string): Promis
       await dispose(next);
       return;
     }
+    default: await runPendingScenario(scenario, dir);
   }
 }
