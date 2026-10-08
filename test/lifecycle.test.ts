@@ -7,3 +7,6 @@ import './lifecycle/T-L6.test.js';
 import './lifecycle/T-L7.test.js';
 import './lifecycle/T-L8.test.js';
 import './lifecycle/T-L9.test.js';
+import './lifecycle/socket-access.test.js';
+import './lifecycle/socket-parent-recheck.test.js';
+import './lifecycle/shutdown-owner.test.js';

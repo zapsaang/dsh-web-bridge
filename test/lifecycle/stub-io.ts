@@ -5,12 +5,14 @@ export function fakeStat(fields: {
   dev?: number;
   ino?: number;
   uid?: number;
+  gid?: number;
   mode?: number;
 }): PathStat {
   return {
     dev: fields.dev ?? 1,
     ino: fields.ino ?? 1,
     uid: fields.uid ?? process.geteuid?.() ?? 0,
+    gid: fields.gid ?? process.getegid?.() ?? 0,
     mode: fields.mode ?? 0o600,
     isSocket: () => fields.kind === 'socket',
     isFile: () => fields.kind === 'file',
