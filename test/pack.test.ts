@@ -4,6 +4,7 @@ import './pack/socket-access-config.test.js';
 import './pack/T-P1.test.js';
 import './pack/T-P3.test.js';
 import './pack/readiness.test.js';
+import './pack/bridge-reload.test.js';
 import './pack/manifest.test.js';
 import './pack/tarball.test.js';
 import './pack/prepack.test.js';
