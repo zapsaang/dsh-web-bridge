@@ -87,6 +87,12 @@ jobs:
           corepack pnpm run test
           node --test .test-dist/test/dsh/*.test.js
           node --test .test-dist/test/browser/*.test.js
+      - name: Mandatory real Linux socket access acceptance (A7-A9)
+        shell: bash
+        run: |
+          corepack pnpm exec tsc -p tsconfig.test.json --outDir .test-dist-linux
+          node_path=$(node -p 'process.execPath')
+          sudo -- env PATH="$PATH" "$node_path" scripts/check-socket-access-linux.mjs
       - name: Pack once, inspect the real archive and dry-run publish
         id: pack
         shell: bash
