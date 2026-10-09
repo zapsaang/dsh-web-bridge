@@ -91,6 +91,11 @@ jobs:
         shell: bash
         run: |
           corepack pnpm exec tsc -p tsconfig.test.json --outDir .test-dist-linux
+          namei -l "$GITHUB_WORKSPACE/.test-dist-linux/test/http/socket-access-linux-worker.js" || true
+          worker="$GITHUB_WORKSPACE/.test-dist-linux/test/http/socket-access-linux-worker.js"
+          sudo -- setpriv --reuid=61001 --regid=61002 --clear-groups --bounding-set=-all --inh-caps=-all --ambient-caps=-all --no-new-privs test -r "$worker" && echo WORKER_TRAVERSABLE || echo WORKER_DENIED
+          sudo -- setpriv --reuid=61001 --regid=61002 --clear-groups --bounding-set=-all --inh-caps=-all --ambient-caps=-all --no-new-privs test -r "$GITHUB_WORKSPACE/node_modules/@deepseek-ai/dsh/package.json" && echo DSH_TRAVERSABLE || echo DSH_DENIED
+          chmod -R a+rX .test-dist-linux node_modules
           node_path=$(node -p 'process.execPath')
           sudo -- env PATH="$PATH" "$node_path" scripts/check-socket-access-linux.mjs
       - name: Pack once, inspect the real archive and dry-run publish
