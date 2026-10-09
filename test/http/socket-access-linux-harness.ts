@@ -51,7 +51,8 @@ async function prerequisites(): Promise<void> {
       console.log(JSON.stringify({ case: 'ordinary-credentials', credentials: reply.credentials }));
     } catch (error) {
       if (error instanceof LinuxPrerequisiteError) throw error;
-      throw new LinuxPrerequisiteError('ordinary worker launch/credentials or pinned DSH installation unavailable');
+      const detail = error instanceof Error ? error.message : String(error);
+      throw new LinuxPrerequisiteError(`ordinary worker launch/credentials or pinned DSH installation unavailable: ${detail}`);
     }
   }
 }

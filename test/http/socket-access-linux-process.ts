@@ -56,13 +56,18 @@ export class LinuxChild implements AsyncDisposable {
   private readonly replies: Reply[] = [];
   private pending: { resolve: (reply: Reply) => void; reject: (error: Error) => void } | undefined;
   private failure: Error | undefined;
+  // Bounded stderr tail: the only evidence from a worker that died before its first reply.
+  private stderrTail = '';
   constructor(readonly subject: Subject, job: Job) {
     this.process = spawn('setpriv', [
       `--reuid=${subject.uid}`, `--regid=${subject.gid}`,
       ...(subject.groups.length ? [`--groups=${subject.groups.join(',')}`] : ['--clear-groups']),
       '--bounding-set=-all', '--inh-caps=-all', '--ambient-caps=-all', '--no-new-privs',
       process.execPath, fileURLToPath(new URL('./socket-access-linux-worker.js', import.meta.url)),
-    ], { stdio: ['ignore', 'ignore', 'ignore', 'ipc'], env: { PATH: process.env['PATH'] ?? '/usr/bin:/bin' } });
+    ], { stdio: ['ignore', 'ignore', 'pipe', 'ipc'], env: { PATH: process.env['PATH'] ?? '/usr/bin:/bin' } });
+    this.process.stderr?.on('data', (chunk: Buffer) => {
+      this.stderrTail = (this.stderrTail + chunk.toString('utf8')).slice(-4096);
+    });
     this.process.on('message', (value: unknown) => {
       try {
         const reply = parseReply(value);
@@ -76,7 +81,8 @@ export class LinuxChild implements AsyncDisposable {
       }
     });
     this.process.on('error', error => this.fail(error));
-    this.process.on('exit', (code, signal) => this.fail(new Error(`Linux worker exited: code=${code} signal=${signal}`)));
+    this.process.on('exit', (code, signal) => this.fail(new Error(
+      `Linux worker exited: code=${code} signal=${signal}${this.stderrTail ? ` stderr=${JSON.stringify(this.stderrTail)}` : ''}`)));
     this.process.send(job);
   }
   private fail(error: Error): void {
