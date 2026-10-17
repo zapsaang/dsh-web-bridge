@@ -5,8 +5,13 @@ import { BridgeAuthorityTrustError, BridgeLoopbackGuardError, BridgeNotImplement
 import { acquire, cancelled, type LeaseIo, type SocketLease } from '../lib/socket.js';
 import { handleCheckContinue, handleRequest, handleUpgrade, type BridgeRuntime } from '../lib/bridge.js';
 
+// As of dsh 0.2.1-rc.2 the web-runtime row no longer owns trustedHosts: the
+// connection row is the one that applies the Host/Origin fence and holds the
+// active authority list. The field is private to HostConnectionService, so this
+// check reads it structurally (like the previous webRuntime.trustedHosts
+// anchor) and fails closed when it is absent or not a string list.
 function assertAuthorityTrust(ctx: Context, authorities: readonly string[]): void {
-  const value: unknown = ctx.get('webRuntime');
+  const value: unknown = ctx.get('connection');
   if (typeof value !== 'object' || value === null || !('trustedHosts' in value)) throw new BridgeAuthorityTrustError();
   const trusted: unknown = value.trustedHosts;
   if (!Array.isArray(trusted) || !trusted.every((entry: unknown): entry is string => typeof entry === 'string')) {

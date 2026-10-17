@@ -17,7 +17,7 @@ export class BridgeLoopbackGuardError extends Error {
 export class BridgeAuthorityTrustError extends Error {
   readonly code = 'ERR_BRIDGE_AUTHORITY_TRUST';
   constructor() {
-    super('dsh web bridge authorities must be bare public names accepted by the web runtime trustedHosts.');
+    super('dsh web bridge authorities must be bare public names accepted by the connection trustedHosts.');
     this.name = 'BridgeAuthorityTrustError';
   }
 }

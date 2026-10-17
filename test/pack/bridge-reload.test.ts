@@ -24,8 +24,7 @@ test('bridge reload: public UDS traffic and exclusive stable lease survive an AC
       }
     });
     ctx.provide('webServer', { host: '127.0.0.1', port: upstream.port });
-    ctx.provide('webRuntime', { trustedHosts: [authority] });
-    ctx.provide('connection', { authenticatedUrl: (base: string) => `${base}?token=${token}` });
+    ctx.provide('connection', { authenticatedUrl: (base: string) => `${base}?token=${token}`, trustedHosts: [authority] });
     const raw = Promise.withResolvers<Fiber>();
     ctx.on('internal/plugin', (fiber) => {
       if (fiber.runtime?.callback === bridge.apply && fiber.uid !== null) raw.resolve(fiber);

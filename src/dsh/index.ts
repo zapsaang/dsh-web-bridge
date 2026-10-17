@@ -5,7 +5,7 @@ import { makeApply } from './apply.js';
 export { BridgeNotImplementedError, BridgeLoopbackGuardError, BridgeAuthorityTrustError } from './errors.js';
 
 export const name = '@zapsaang/dsh-web-bridge';
-export const inject = ['connection', 'webServer', 'webRuntime'];
+export const inject = ['connection', 'webServer'];
 
 export interface Config {
   readonly socketPath: string;

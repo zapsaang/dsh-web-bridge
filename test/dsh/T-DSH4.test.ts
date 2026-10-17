@@ -29,7 +29,7 @@ test('T-DSH4 waits for async Service.init and reloads/disposes required consumer
     }
   }
   const consumer = app.ctx.plugin({
-    inject: ['nativeProbe', 'connection', 'webServer', 'webRuntime'],
+    inject: ['nativeProbe', 'connection', 'webServer'],
     apply(ctx: Context) {
       assert.ok(ctx.nativeProbe.ready, `consumer activation events: ${events.join(',')}`);
       events.push('consumer');

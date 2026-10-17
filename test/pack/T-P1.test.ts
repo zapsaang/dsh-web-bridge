@@ -11,7 +11,7 @@ import { cleanup, tempDir } from '../lifecycle/helpers.js';
 // §14.7 T-P1: the pinned overlay must load and actually insert one row whose
 // shape matches the plugin contract; the Config schema is exactly
 // socketPath (concrete default) + required finite authorities; startup
-// cross-checks authorities ⊆ ctx.webRuntime.trustedHosts public bare names.
+// cross-checks authorities ⊆ the active connection trustedHosts bare names.
 
 interface YamlModule {
   load: (text: string) => unknown;
@@ -79,14 +79,13 @@ function errorCode(error: unknown): string | undefined {
 async function assemble(trustedHosts: unknown, socketPath: string, authorities = ['dsh.example.com']): Promise<Context> {
   const ctx = new Context();
   ctx.provide('webServer', { host: '127.0.0.1', port: 18777 });
-  ctx.provide('connection', { authenticatedUrl: () => 'http://127.0.0.1/' });
-  ctx.provide('webRuntime', { trustedHosts });
+  ctx.provide('connection', { authenticatedUrl: () => 'http://127.0.0.1/', trustedHosts });
   const fiber = await ctx.plugin(bridge, { socketPath, authorities });
   await fiber.await();
   return ctx;
 }
 
-test('T-P1b: startup accepts authorities that are a subset of the web runtime trusted bare names', async (t) => {
+test('T-P1b: startup accepts authorities that are a subset of the connection trusted bare names', async (t) => {
   // Given
   const dir = await tempDir();
   t.after(() => cleanup(dir));
@@ -124,7 +123,7 @@ test('T-P1d: a port-bearing trusted entry does not satisfy the bare-name require
   await assert.rejects(access(socketPath), /ENOENT/);
 });
 
-test('T-P1e: startup fails closed when the web runtime exposes no trusted host list', async (t) => {
+test('T-P1e: startup fails closed when the connection exposes no trusted host list', async (t) => {
   // Given
   const dir = await tempDir();
   t.after(() => cleanup(dir));

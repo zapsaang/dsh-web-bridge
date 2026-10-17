@@ -7,12 +7,6 @@ import type { IncomingHttpHeaders, OutgoingHttpHeaders } from 'node:http';
 import { Context } from '@deepseek-ai/cordis';
 import { Connection, Credentials, Frontend, WebApp, WebServerModule } from './dependencies.js';
 
-declare module '@deepseek-ai/cordis' {
-  interface Context {
-    webRuntime: import('../../node_modules/.pnpm/node_modules/@deepseek-ai/dsh-web-app/lib/types/index.js').WebRuntimeValues;
-  }
-}
-
 export const authority = 'probe.example.test';
 export const unauthorized = 'dsh web authentication required; reopen the URL printed by dsh web.\n';
 export type HttpResult = {
@@ -62,10 +56,10 @@ export class Harness implements AsyncDisposable {
   // Lifecycle operations must target the raw Fiber, not the ctx.plugin()
   // PromiseLike wrapper: restart() on the wrapper writes state onto the
   // wrapper while services stay registered on the raw fiber (cordis
-  // 4.0.5-alpha.1 registry.ts wrapped=Object.create(fiber)); see T-DSH4b.
+  // 4.0.5 registry.ts wrapped=Object.create(fiber)); see T-DSH4b.
   private constructor(readonly ctx: Context, readonly connectionFiber: Awaited<ReturnType<Context['plugin']>>) {}
 
-  static async start(home: string): Promise<Harness> {
+  static async start(home: string, trustedHosts: readonly string[] = [authority]): Promise<Harness> {
     const ctx = new Context();
     try {
       await ctx.plugin(Credentials.LocalCredentialProvider, {
@@ -73,11 +67,11 @@ export class Harness implements AsyncDisposable {
       });
       await ctx.plugin(WebServerModule.WebServer, { host: '127.0.0.1', port: 0 });
       await ctx.plugin(WebApp, {
-        printUrl: false, openBrowser: false, surfaceContext: false, trustedHosts: [authority],
+        printUrl: false, openBrowser: false, surfaceContext: false,
       });
       const connectionFiber = await ctx.plugin({
-        name: 'native-probe-connection', inject: ['credentials', 'webRuntime', 'webServer'],
-        apply: (active: Context) => Connection.apply(active, { trustedHosts: active.webRuntime.trustedHosts }),
+        name: 'native-probe-connection', inject: ['credentials', 'webServer'],
+        apply: (active: Context) => Connection.apply(active, { trustedHosts: [...trustedHosts] }),
       });
       const fallback = ctx.registry.get(Frontend);
       assert.ok(fallback, 'shipped frontend fallback is registered');
@@ -89,7 +83,11 @@ export class Harness implements AsyncDisposable {
     }
   }
 
-  get port(): number { return this.ctx.webServer.port; }
+  get port(): number {
+    const port = this.ctx.webServer.port;
+    assert.ok(port !== undefined, 'web server is listening');
+    return port;
+  }
   token(): string {
     const token = new URL(this.ctx.connection.authenticatedUrl(`http://127.0.0.1:${this.port}/`)).searchParams.get('token');
     assert.ok(token, 'process token exists');
@@ -107,10 +105,10 @@ export class Harness implements AsyncDisposable {
   async [Symbol.asyncDispose](): Promise<void> { await this.ctx.fiber.dispose(); }
 }
 
-export async function isolated(): Promise<Harness & AsyncDisposable> {
+export async function isolated(trustedHosts: readonly string[] = [authority]): Promise<Harness & AsyncDisposable> {
   const home = await temporaryHome();
   try {
-    const harness = await Harness.start(home);
+    const harness = await Harness.start(home, trustedHosts);
     const dispose = harness[Symbol.asyncDispose].bind(harness);
     harness[Symbol.asyncDispose] = async () => {
       try { await dispose(); }

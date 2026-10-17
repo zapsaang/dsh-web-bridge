@@ -1,6 +1,6 @@
 {
   "name": "@zapsaang/dsh-web-bridge",
-  "version": "0.1.0-alpha.3",
+  "version": "0.1.0-alpha.4",
   "description": "Unix-socket session bridge for DeepSeek Harness behind Cloudflare Access, packaged as a Cordis plugin.",
   "license": "MIT",
   "repository": {
@@ -45,9 +45,9 @@
     "node": ">=24.21.0 <25"
   },
   "peerDependencies": {
-    "@deepseek-ai/cordis": "4.0.5-alpha.1",
-    "@deepseek-ai/dsh": "0.2.1-alpha.1",
-    "@deepseek-ai/schemastery": "3.18.5-alpha.1"
+    "@deepseek-ai/cordis": "4.0.5",
+    "@deepseek-ai/dsh": "0.2.1-rc.2",
+    "@deepseek-ai/schemastery": "3.18.5"
   },
   "scripts": {
     "build": "node --input-type=module -e \"import { rmSync } from 'node:fs'; rmSync('lib', { recursive: true, force: true });\" && tsc -p tsconfig.json",
@@ -58,9 +58,9 @@
   },
   "packageManager": "pnpm@12.9.1",
   "devDependencies": {
-    "@deepseek-ai/cordis": "4.0.5-alpha.1",
-    "@deepseek-ai/dsh": "0.2.1-alpha.1",
-    "@deepseek-ai/schemastery": "3.18.5-alpha.1",
+    "@deepseek-ai/cordis": "4.0.5",
+    "@deepseek-ai/dsh": "0.2.1-rc.2",
+    "@deepseek-ai/schemastery": "3.18.5",
     "@types/node": "24.19.1",
     "playwright": "1.63.0",
     "typescript": "7.0.2"

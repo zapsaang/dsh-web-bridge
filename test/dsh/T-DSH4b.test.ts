@@ -8,7 +8,7 @@ declare module '@deepseek-ai/cordis' {
 }
 
 // Permanent negative record of a confirmed upstream pitfall in
-// @deepseek-ai/cordis 4.0.5-alpha.1: ctx.plugin() returns a PromiseLike
+// @deepseek-ai/cordis 4.0.5: ctx.plugin() returns a PromiseLike
 // wrapper (registry.ts: wrapped = Object.create(fiber)). Calling restart()
 // on the wrapper writes lifecycle state onto the wrapper while services stay
 // registered on the raw fiber, whose state wrongly remains ACTIVE; required
@@ -29,7 +29,7 @@ test('T-DSH4b wrapper restart reactivates required consumer before async init co
     }
   }
   app.ctx.plugin({
-    inject: ['nativeProbeB', 'connection', 'webServer', 'webRuntime'],
+    inject: ['nativeProbeB', 'connection', 'webServer'],
     apply(ctx: Context) { if (secondInit) observedReady = ctx.nativeProbeB.ready; },
   });
   const wrapper = app.ctx.plugin(DelayedService);

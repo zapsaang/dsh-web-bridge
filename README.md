@@ -1,6 +1,6 @@
 # @zapsaang/dsh-web-bridge
 
-> **Status: experimental alpha.** The pinned alpha peers below are a compatibility proposal, not a support claim, and several deployment verification gates are NOT RUN or PARTIAL — see "Deployment verification gates" before treating any of this as supported.
+> **Status: experimental alpha.** The pinned peers below are a compatibility proposal, not a support claim, and several deployment verification gates are NOT RUN or PARTIAL — see "Deployment verification gates" before treating any of this as supported.
 
 Unix-socket session bridge that puts a [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (DSH) Web GUI behind Cloudflare Access. The bridge is a Cordis plugin that runs inside the DSH process, listens only on a Unix domain socket, and performs the loopback token exchange on behalf of browsers that arrive through the tunnel — so launch tokens never leave the local machine and never appear in a remote URL, log, or address bar.
 
@@ -8,21 +8,23 @@ The `§` section references below (e.g. §12.1) point into an internal design do
 
 ## Installation
 
-Pinned alpha peers (exact versions, no ranges — §10.2):
+Pinned peers (exact versions, no ranges — §10.2):
 
 | Peer | Version |
 |---|---|
-| `@deepseek-ai/dsh` | `0.2.1-alpha.1` |
-| `@deepseek-ai/cordis` | `4.0.5-alpha.1` |
-| `@deepseek-ai/schemastery` | `3.18.5-alpha.1` |
+| `@deepseek-ai/dsh` | `0.2.1-rc.2` |
+| `@deepseek-ai/cordis` | `4.0.5` |
+| `@deepseek-ai/schemastery` | `3.18.5` |
 
 Runtime: Node `>=24.21.0 <25` plus the util-linux `flock` system tool.
 
 Install into the web profile (the CLI forwards the remaining arguments to pnpm inside the profile directory, §10.3):
 
 ```sh
-dsh plugin --profile web add @zapsaang/dsh-web-bridge@0.1.0-alpha.1
+dsh plugin --profile web add @zapsaang/dsh-web-bridge@0.1.0-alpha.4
 ```
+
+**DSH 0.2.1-rc.2 migration.** The web-runtime row (`@deepseek-ai/dsh-web-app`) no longer owns `trustedHosts`, and the `webRuntime` service is gone. The connection row (`@deepseek-ai/dsh-client-connection`) now owns the Host/Origin fence and its active `trustedHosts` list. This bridge therefore injects `[connection, webServer]` and cross-checks `authorities` against the live connection list. A deployment overlay written for an older alpha that still puts `trustedHosts` on the web-runtime row must move that key to the `connection` row; the rc.2 web-runtime schema rejects the old key.
 
 **Activation mechanism.** The package's `package.json` carries `dsh.bundle.patch: ["./cordis.patch.yml"]`; the profile loader (`bundlePatchPaths`) reads that metadata and applies the shipped patch as one bundle layer. The patch is a single append-mode `insert` row:
 
@@ -30,7 +32,7 @@ dsh plugin --profile web add @zapsaang/dsh-web-bridge@0.1.0-alpha.1
 - insert:
     - id: dsh-web-bridge
       name: '@zapsaang/dsh-web-bridge'
-      inject: [connection, webServer, webRuntime]
+      inject: [connection, webServer]
       config:
         socketPath: /run/dsh-web/session-bridge.sock
         authorities: [dsh.example.com, dsh2.example.com]
@@ -43,7 +45,7 @@ The shipped bundle intentionally keeps exactly two config keys (`socketPath`, `a
 ```yaml
 - id: dsh-web-bridge
   name: '@zapsaang/dsh-web-bridge'
-  inject: [connection, webServer, webRuntime]
+  inject: [connection, webServer]
   config:
     socketPath: /run/dsh-web/session-bridge.sock
     socketAccess: group
@@ -54,7 +56,7 @@ The overlay only takes effect together with the matching group-mode tmpfiles lin
 
 Installing the package is not the same as enabling it: CLI bundle selection comes from the plugin-manager reconcile — a newly added bundle with `dsh.bundle` metadata is selected by default, an already-installed-but-disabled dependency is **not** re-enabled, and a package without `dsh.bundle` metadata stays a plain dependency (§10.3). A live process is not readiness; see "Readiness" below.
 
-**DSH-side overlay.** The deployment must also restate the webserver / web-runtime rows so the DSH web server stays on loopback and never prints a tokenized URL (§12.1 — a patch replaces a row's whole config, so every owned key is restated):
+**DSH-side overlay.** The deployment must also restate the webserver / web-runtime / connection rows so the DSH web server stays on loopback and never prints a tokenized URL (§12.1 — a patch replaces a row's whole config, so every owned key is restated):
 
 ```yaml
 - id: webserver
@@ -73,11 +75,15 @@ Installing the package is not the same as enabling it: CLI bundle selection come
     openBrowser: false
     printUrl: false
     surfaceContext: true
-    publicUrl: !!js ctx.webStartup.publicUrl   # alpha only; omit the whole line on rc2
+    publicUrl: !!js ctx.webStartup.publicUrl   # optional; omit when no public root is advertised
+- id: connection
+  name: '@deepseek-ai/dsh-client-connection'
+  inject: [webStartup]
+  config:
     trustedHosts: !!js "['dsh.example.com', 'dsh2.example.com', ...ctx.webStartup.trustedHosts]"
 ```
 
-The `connection` row is left untouched; it inherits the merged `trustedHosts` through `ctx.webRuntime.trustedHosts`.
+The `connection` row replaces its whole config too: the example shows the only key this deployment overrides. A deployment that also sets `recovery`, `cookieMaxAgeDays`, or `maxRequestBodyBytes` must restate those keys here, or they fall back to the schema defaults.
 
 ## Cloudflare Access configuration
 
@@ -111,10 +117,10 @@ ingress:
 Three deliberately different lists (§12.1) — do not mirror them:
 
 1. **bridge `authorities`** — only the public names the bridge may bootstrap (here: the two public hostnames). Canonical bare DNS names: lowercase, no port, no wildcard, no IP literal (schema-enforced).
-2. **web-runtime `trustedHosts`** — the two public names **plus** any CLI `--trusted-host` extras.
-3. **connection `trustedHosts`** — inherits list 2 verbatim.
+2. **webStartup `trustedHosts`** — only the `--trusted-host` values named on this invocation. It is an input to the connection row, not a deployment list.
+3. **connection `trustedHosts`** — the active Host/Origin fence list: the public names plus any CLI extras. On `0.2.1-rc.2` this is the authoritative list; the web-runtime row no longer carries one.
 
-At startup the bridge cross-checks that every configured authority is a bare (port-less) entry of the **active** `ctx.webRuntime.trustedHosts` (§12.1). A missing entry, a port-bearing entry, or a runtime without a trusted-host list fails closed with `ERR_BRIDGE_AUTHORITY_TRUST` before any socket is created. CLI extras remain valid for the native fence but never become bridge-approved authorities.
+At startup the bridge cross-checks that every configured authority is a bare (port-less) entry of the **active** `connection.trustedHosts` (§12.1). A missing entry, a port-bearing entry, or a connection without a trusted-host list fails closed with `ERR_BRIDGE_AUTHORITY_TRUST` before any socket is created. CLI extras remain valid for the native fence but never become bridge-approved authorities.
 
 ## tmpfiles and directory permissions
 
@@ -178,9 +184,9 @@ After any DSH upgrade, before claiming compatibility (§16):
 1. Rerun the **T-DSH contract probes** against the new pinned installation (focused runner, `.test-dist-probes`): token exchange 303+cookie shape (T-DSH1), cookie matrix (T-DSH5), rotation/reactivation semantics (T-DSH6/7/10), trust fence (T-DSH8), `authorizeIndex` method matrix (T-DSH9), Cordis lifecycle (T-DSH4/4b).
 2. Rerun the **T-B browser layer** (focused runner, `.test-dist-browser`).
 3. Rerun the full default gate: `corepack pnpm run typecheck && corepack pnpm run build && corepack pnpm run test && node scripts/check-pack-files.mjs`.
-4. Contract anchors the bridge relies on (§16): `ctx.connection.authenticatedUrl()`, `GET /?token=` → 303 + Set-Cookie, 401 semantics, authority-bound cookies, `ctx.webServer.host/port`, active `ctx.webRuntime.trustedHosts`. If DSH removes or changes any of these, the bridge must stop auto-bootstrap and return the original 401 — never synthesize cookies, read the signing secret, inject a fixed token, or bypass DSH auth.
+4. Contract anchors the bridge relies on (§16): `ctx.connection.authenticatedUrl()`, `GET /?token=` → 303 + Set-Cookie, 401 semantics, authority-bound cookies, `ctx.webServer.host/port`, and the active `connection` trustedHosts list that drives the Host/Origin fence. If DSH removes or changes any of these, the bridge must stop auto-bootstrap and return the original 401 — never synthesize cookies, read the signing secret, inject a fixed token, or bypass DSH auth.
 
-The exact alpha peers above are a compatibility **proposal**; do not publish them as a support claim until these gates pass against that version.
+The exact peers above are a compatibility **proposal**; do not publish them as a support claim until these gates pass against that version.
 
 ## Logging policy (§12.4)
 
@@ -198,7 +204,7 @@ Forbidden — must never appear in any log: tokens, tokenized URLs, cookie value
 
 ## Publishing
 
-Maintainer instructions, not a record of completed actions. The package already exists on the registry — the maintainer bootstrapped it interactively (`0.0.0-stage` placeholder, then `0.1.0-alpha.1`), so releases now go through the tag-triggered workflow below. Published versions are immutable; every fix needs a new version — current `0.1.0-alpha.2`, next new version e.g. `0.1.0-alpha.3`. README changes only reach the npm page if they land before packing/publishing that version.
+Maintainer instructions, not a record of completed actions. The package already exists on the registry — the maintainer bootstrapped it interactively (`0.0.0-stage` placeholder, then `0.1.0-alpha.1`), so releases now go through the tag-triggered workflow below. Published versions are immutable; every fix needs a new version — current `0.1.0-alpha.3`, next new version `0.1.0-alpha.4` (the `0.2.1-rc.2` compatibility change). README changes only reach the npm page if they land before packing/publishing that version.
 
 The published name is **scoped** (`@zapsaang/dsh-web-bridge`). npm rejects the unscoped `dsh-web-bridge` with a 403 because it is too similar to the existing `dsh-webbridge` package, and that similarity check cannot be appealed — so do not "simplify" the name back to unscoped. The scope is also part of the Cordis load contract: the profile loader resolves the patch row's `name` as a bare module specifier, so `package.json`, `cordis.patch.yml`, and the plugin's exported `name` must always move together. The unscoped name has never been published; the bootstrap created the scoped `@zapsaang/dsh-web-bridge`.
 
@@ -238,7 +244,7 @@ Run the formal entry on a privileged Linux runner before packing, not as a skipp
 
 `prepack` runs `npm run build` as the pack gate, so `npm pack`/`npm publish` do not require pnpm on PATH.
 
-Historical local baseline (2026-10-07; macOS 15.7.9, Node 24.21.0, util-linux `flock` 2.42.4), not current group-feature proof or a current release verdict: `typecheck` and `build` clean; default gate 423 tests → 422 pass, 0 fail, 1 skipped; DSH suite 60/60; browser suite 7/7; `check-pack-files.mjs` PASS (18 packed files). The single skip is T-H14b, which needs `setpriv` to drop to a foreign UID. The `flock` dependency is the one environment prerequisite that is easy to miss: without it the whole lease layer fails with `ERR_BRIDGE_LEASE_FLOCK` rather than a clear "tool missing" message.
+Historical local baseline (2026-10-17; macOS, Node 24.21.0, `@deepseek-ai/dsh` `0.2.1-rc.2`, util-linux `flock` 2.42.4), not current group-feature proof or a current release verdict: `typecheck` and `build` clean; default gate 518 tests → 515 pass, 0 fail, 3 skipped; DSH suite 62/62; browser suite 7/7; `check-pack-files.mjs` PASS (30 packed files). The three skips are T-H14b (needs `setpriv` to drop to a foreign UID), A7-A9 (needs a real Linux `/proc` and Unix DAC), and the foreign-owner A3 case (needs root). A host sandbox that blocks `chmod` of the setgid bit also fails the group-mode fixtures; run that gate outside such a sandbox. The `flock` dependency is the one environment prerequisite that is easy to miss: without it the whole lease layer fails with `ERR_BRIDGE_LEASE_FLOCK` rather than a clear "tool missing" message.
 
 ### Pack, inspect, dry-run
 

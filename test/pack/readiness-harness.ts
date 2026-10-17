@@ -57,11 +57,10 @@ export async function fixture(t: TestContext, options: {
   const ctx = new Context();
   let factoryCalls = 0;
   ctx.provide('webServer', { host: '127.0.0.1', port: upstream.port });
-  ctx.provide('webRuntime', { trustedHosts: [authority] });
   ctx.provide('connection', { authenticatedUrl: (base: string) => {
     factoryCalls += 1;
     return `${base}?token=${token}`;
-  } });
+  }, trustedHosts: [authority] });
   const dependencies = readinessIo(socketPath, options.stage,
     options.disposeBeforeApplyResume ? () => { void fiber.dispose(); } : undefined);
   if (options.preBind) dependencies.holdOpenLock();

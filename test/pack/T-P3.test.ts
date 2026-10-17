@@ -16,8 +16,7 @@ import { cleanup, requestOverSocket, tempDir } from '../lifecycle/helpers.js';
 async function assemble(socketPath: string, authority: string): Promise<Context> {
   const ctx = new Context();
   ctx.provide('webServer', { host: '127.0.0.1', port: 18777 });
-  ctx.provide('connection', { authenticatedUrl: () => 'http://127.0.0.1/' });
-  ctx.provide('webRuntime', { trustedHosts: [authority] });
+  ctx.provide('connection', { authenticatedUrl: () => 'http://127.0.0.1/', trustedHosts: [authority] });
   const fiber = await ctx.plugin(bridge, { socketPath, authorities: [authority] });
   await fiber.await();
   return ctx;
@@ -93,8 +92,7 @@ test('T-P3 group: resolved plugin readiness implies a 0660 socket carrying the p
   // When
   const ctx = new Context();
   ctx.provide('webServer', { host: '127.0.0.1', port: 18777 });
-  ctx.provide('connection', { authenticatedUrl: () => 'http://127.0.0.1/' });
-  ctx.provide('webRuntime', { trustedHosts: ['probe-p3.example.test'] });
+  ctx.provide('connection', { authenticatedUrl: () => 'http://127.0.0.1/', trustedHosts: ['probe-p3.example.test'] });
   const fiber = await ctx.plugin(bridge, { socketPath, authorities: ['probe-p3.example.test'], socketAccess: 'group' });
   await fiber.await();
   t.after(() => ctx.fiber.dispose());
