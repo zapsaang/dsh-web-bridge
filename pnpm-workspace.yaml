@@ -6,7 +6,7 @@ allowBuilds:
   node-pty: false
   protobufjs: false
 
-# The pinned DSH rc.2 peers are newer than pnpm's default 1-day release-age
+# The pinned DSH rc peers are newer than pnpm's default 1-day release-age
 # window. Peers are exact (no ranges) and the lockfile carries integrity
 # hashes, so exclude only the DSH scope and its two pinned companions.
 minimumReleaseAgeExclude:

@@ -67,8 +67,8 @@ test('T-DSH3c: loopback host with a valid bound port passes and binds the UDS', 
   await assert.rejects(access(socketPath), /ENOENT/, 'UDS removed after plugin dispose');
 });
 
-test('T-DSH3d: the real rc.2 connection trustedHosts satisfies the authority cross-check', async (t) => {
-  // Given a real DSH 0.2.1-rc.2 tree whose Connection holds the authority list
+test('T-DSH3d: the real rc connection trustedHosts satisfies the authority cross-check', async (t) => {
+  // Given a real pinned DSH tree whose Connection holds the authority list
   await using app = await isolated();
   const dir = await tempDir();
   t.after(() => cleanup(dir));
@@ -82,7 +82,7 @@ test('T-DSH3d: the real rc.2 connection trustedHosts satisfies the authority cro
   await assert.rejects(access(socketPath), /ENOENT/);
 });
 
-test('T-DSH3e: a real rc.2 connection without the authority fails closed before binding', async (t) => {
+test('T-DSH3e: a real rc connection without the authority fails closed before binding', async (t) => {
   // Given a real DSH tree whose Connection lists no deployment authorities
   await using app = await isolated([]);
   const dir = await tempDir();

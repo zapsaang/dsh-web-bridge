@@ -12,7 +12,7 @@ Pinned peers (exact versions, no ranges — §10.2):
 
 | Peer | Version |
 |---|---|
-| `@deepseek-ai/dsh` | `0.2.1-rc.2` |
+| `@deepseek-ai/dsh` | `0.2.1-rc.3` |
 | `@deepseek-ai/cordis` | `4.0.5` |
 | `@deepseek-ai/schemastery` | `3.18.5` |
 
@@ -21,10 +21,10 @@ Runtime: Node `>=24.21.0 <25` plus the util-linux `flock` system tool.
 Install into the web profile (the CLI forwards the remaining arguments to pnpm inside the profile directory, §10.3):
 
 ```sh
-dsh plugin --profile web add @zapsaang/dsh-web-bridge@0.1.0-alpha.4
+dsh plugin --profile web add @zapsaang/dsh-web-bridge@0.1.0-alpha.5
 ```
 
-**DSH 0.2.1-rc.2 migration.** The web-runtime row (`@deepseek-ai/dsh-web-app`) no longer owns `trustedHosts`, and the `webRuntime` service is gone. The connection row (`@deepseek-ai/dsh-client-connection`) now owns the Host/Origin fence and its active `trustedHosts` list. This bridge therefore injects `[connection, webServer]` and cross-checks `authorities` against the live connection list. A deployment overlay written for an older alpha that still puts `trustedHosts` on the web-runtime row must move that key to the `connection` row; the rc.2 web-runtime schema rejects the old key.
+**DSH 0.2.1-rc migration.** The web-runtime row (`@deepseek-ai/dsh-web-app`) no longer owns `trustedHosts`, and the `webRuntime` service is gone. The connection row (`@deepseek-ai/dsh-client-connection`) owns the Host/Origin fence and its active `trustedHosts` list. This bridge therefore injects `[connection, webServer]` and cross-checks `authorities` against the live connection list. A deployment overlay written for an older alpha that still puts `trustedHosts` on the web-runtime row must move that key to the `connection` row; current web-runtime schemas reject the old key.
 
 **Activation mechanism.** The package's `package.json` carries `dsh.bundle.patch: ["./cordis.patch.yml"]`; the profile loader (`bundlePatchPaths`) reads that metadata and applies the shipped patch as one bundle layer. The patch is a single append-mode `insert` row:
 
@@ -118,7 +118,7 @@ Three deliberately different lists (§12.1) — do not mirror them:
 
 1. **bridge `authorities`** — only the public names the bridge may bootstrap (here: the two public hostnames). Canonical bare DNS names: lowercase, no port, no wildcard, no IP literal (schema-enforced).
 2. **webStartup `trustedHosts`** — only the `--trusted-host` values named on this invocation. It is an input to the connection row, not a deployment list.
-3. **connection `trustedHosts`** — the active Host/Origin fence list: the public names plus any CLI extras. On `0.2.1-rc.2` this is the authoritative list; the web-runtime row no longer carries one.
+3. **connection `trustedHosts`** — the active Host/Origin fence list: the public names plus any CLI extras. On DSH `0.2.1-rc.3` this is the authoritative list; the web-runtime row no longer carries one.
 
 At startup the bridge cross-checks that every configured authority is a bare (port-less) entry of the **active** `connection.trustedHosts` (§12.1). A missing entry, a port-bearing entry, or a connection without a trusted-host list fails closed with `ERR_BRIDGE_AUTHORITY_TRUST` before any socket is created. CLI extras remain valid for the native fence but never become bridge-approved authorities.
 
@@ -204,7 +204,7 @@ Forbidden — must never appear in any log: tokens, tokenized URLs, cookie value
 
 ## Publishing
 
-Maintainer instructions, not a record of completed actions. The package already exists on the registry — the maintainer bootstrapped it interactively (`0.0.0-stage` placeholder, then `0.1.0-alpha.1`), so releases now go through the tag-triggered workflow below. Published versions are immutable; every fix needs a new version — current `0.1.0-alpha.3`, next new version `0.1.0-alpha.4` (the `0.2.1-rc.2` compatibility change). README changes only reach the npm page if they land before packing/publishing that version.
+Maintainer instructions, not a record of completed actions. The package already exists on the registry — the maintainer bootstrapped it interactively (`0.0.0-stage` placeholder, then `0.1.0-alpha.1`), so releases now go through the tag-triggered workflow below. Published versions are immutable; every fix needs a new version — current `0.1.0-alpha.4`, next new version `0.1.0-alpha.5` (the `0.2.1-rc.3` compatibility change). README changes only reach the npm page if they land before packing/publishing that version.
 
 The published name is **scoped** (`@zapsaang/dsh-web-bridge`). npm rejects the unscoped `dsh-web-bridge` with a 403 because it is too similar to the existing `dsh-webbridge` package, and that similarity check cannot be appealed — so do not "simplify" the name back to unscoped. The scope is also part of the Cordis load contract: the profile loader resolves the patch row's `name` as a bare module specifier, so `package.json`, `cordis.patch.yml`, and the plugin's exported `name` must always move together. The unscoped name has never been published; the bootstrap created the scoped `@zapsaang/dsh-web-bridge`.
 
@@ -244,14 +244,14 @@ Run the formal entry on a privileged Linux runner before packing, not as a skipp
 
 `prepack` runs `npm run build` as the pack gate, so `npm pack`/`npm publish` do not require pnpm on PATH.
 
-Historical local baseline (2026-10-17; macOS, Node 24.21.0, `@deepseek-ai/dsh` `0.2.1-rc.2`, util-linux `flock` 2.42.4), not current group-feature proof or a current release verdict: `typecheck` and `build` clean; default gate 518 tests → 515 pass, 0 fail, 3 skipped; DSH suite 62/62; browser suite 7/7; `check-pack-files.mjs` PASS (30 packed files). The three skips are T-H14b (needs `setpriv` to drop to a foreign UID), A7-A9 (needs a real Linux `/proc` and Unix DAC), and the foreign-owner A3 case (needs root). A host sandbox that blocks `chmod` of the setgid bit also fails the group-mode fixtures; run that gate outside such a sandbox. The `flock` dependency is the one environment prerequisite that is easy to miss: without it the whole lease layer fails with `ERR_BRIDGE_LEASE_FLOCK` rather than a clear "tool missing" message.
+Historical local baseline (2026-10-24; Linux, Node 24.21.0, `@deepseek-ai/dsh` `0.2.1-rc.3`, util-linux `flock` 2.42.4), not current group-feature proof or a current release verdict: `typecheck` and `build` clean; default gate 518 tests → 515 pass, 0 fail, 3 skipped; DSH suite 62/62; browser suite 7/7; `check-pack-files.mjs` PASS (30 packed files). The three skips are T-H14b (needs `setpriv` to drop to a foreign UID), A7-A9 (needs a real Linux `/proc` and Unix DAC), and the foreign-owner A3 case (needs root). A host sandbox that blocks `chmod` of the setgid bit also fails the group-mode fixtures; run that gate outside such a sandbox. The `flock` dependency is the one environment prerequisite that is easy to miss: without it the whole lease layer fails with `ERR_BRIDGE_LEASE_FLOCK` rather than a clear "tool missing" message.
 
 ### Pack, inspect, dry-run
 
 ```sh
 npm pack                                              # real tarball
-tar -tzf ./zapsaang-dsh-web-bridge-0.1.0-alpha.1.tgz  # inspect contents
-npm publish ./zapsaang-dsh-web-bridge-0.1.0-alpha.1.tgz --dry-run --tag alpha --access public --registry https://registry.npmjs.org/
+tar -tzf ./zapsaang-dsh-web-bridge-0.1.0-alpha.5.tgz  # inspect contents
+npm publish ./zapsaang-dsh-web-bridge-0.1.0-alpha.5.tgz --dry-run --tag alpha --access public --registry https://registry.npmjs.org/
 ```
 
 Do not pass `--provenance` locally; provenance comes from CI OIDC only, and a dry run is not proof of authentication or provenance. Per the npm docs, a relative tarball/folder package-spec must begin with an explicit `./` prefix; absolute paths are also accepted.
@@ -299,4 +299,4 @@ npm view @zapsaang/dsh-web-bridge dist-tags --json
 
 ### Installing from npm
 
-Check what actually exists: `npm view @zapsaang/dsh-web-bridge dist-tags --json`. Prefer explicit versions (`@zapsaang/dsh-web-bridge@0.1.0-alpha.1`) or `@alpha`; on a first publication the tag layout can vary, so inspect the registry rather than assuming `latest` exists or that `alpha` can never point at the newest version. There is no promotion-to-`latest` workflow.
+Check what actually exists: `npm view @zapsaang/dsh-web-bridge dist-tags --json`. Prefer explicit versions (`@zapsaang/dsh-web-bridge@0.1.0-alpha.5`) or `@alpha`; on a first publication the tag layout can vary, so inspect the registry rather than assuming `latest` exists or that `alpha` can never point at the newest version. There is no promotion-to-`latest` workflow.

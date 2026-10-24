@@ -63,13 +63,13 @@ test('T-P4: bundle metadata declares exactly the shipped patch file', () => {
   assert.deepEqual([...json.files].sort(), ['cordis.patch.yml', 'lib'], 'published files are lib + patch only');
 });
 
-test('T-P4: peer dependencies are exactly the pinned rc.2 trio with no runtime deps', () => {
+test('T-P4: peer dependencies are exactly the pinned rc.3 trio with no runtime deps', () => {
   // Given / When
   const json = manifest();
   // Then
   assert.deepEqual(json.peerDependencies, {
     '@deepseek-ai/cordis': '4.0.5',
-    '@deepseek-ai/dsh': '0.2.1-rc.2',
+    '@deepseek-ai/dsh': '0.2.1-rc.3',
     '@deepseek-ai/schemastery': '3.18.5',
   });
   assert.ok(!('dependencies' in json), 'runtime comes only from the host-provided peers');

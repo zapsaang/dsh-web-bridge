@@ -20,14 +20,14 @@ export const Frontend: typeof import('../../node_modules/.pnpm/node_modules/@dee
   await import(web.resolve('@deepseek-ai/dsh-host-frontend-static'));
 
 for (const [resolver, name, expected] of [
-  [installed, '@deepseek-ai/dsh', '0.2.1-rc.2'],
+  [installed, '@deepseek-ai/dsh', '0.2.1-rc.3'],
   [installed, '@deepseek-ai/cordis', '4.0.5'],
   [installed, '@deepseek-ai/schemastery', '3.18.5'],
-  [web, '@deepseek-ai/dsh-web-app', '0.2.1-rc.2'],
-  [web, '@deepseek-ai/dsh-host-webserver', '0.2.1-rc.2'],
-  [web, '@deepseek-ai/dsh-host-frontend-static', '0.2.1-rc.2'],
-  [web, '@deepseek-ai/dsh-client-connection', '0.2.1-rc.2'],
-  [base, '@deepseek-ai/dsh-credentials-local', '0.2.1-rc.2'],
+  [web, '@deepseek-ai/dsh-web-app', '0.2.1-rc.3'],
+  [web, '@deepseek-ai/dsh-host-webserver', '0.2.1-rc.3'],
+  [web, '@deepseek-ai/dsh-host-frontend-static', '0.2.1-rc.3'],
+  [web, '@deepseek-ai/dsh-client-connection', '0.2.1-rc.3'],
+  [base, '@deepseek-ai/dsh-credentials-local', '0.2.1-rc.3'],
 ] as const) {
   const metadata: unknown = resolver(`${name}/package.json`);
   assert.ok(typeof metadata === 'object' && metadata !== null && 'version' in metadata);
