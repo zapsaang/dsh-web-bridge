@@ -210,7 +210,7 @@ The published name is **scoped** (`@zapsaang/dsh-web-bridge`). npm rejects the u
 
 ### Toolchain
 
-- Node `24.21.0`, npm `>=11.5.1`, pnpm `12.9.1` (development via corepack); `tar` plus the util-linux `flock` binary.
+- Node `24.21.0`, npm `>=11.5.1`, pnpm `12.9.1` (development via corepack); `tar` plus the util-linux `flock` binary. The `promote-latest` CI job additionally installs `npm@11.21.1`: OIDC `npm dist-tag` requires npm `>=11.21.0` (or `>=12.2.0`), and Node `24.21.0` bundles npm 11.19.0.
 - The formal Linux A7-A9 gate also needs `getfacl` (ACL inspection) and util-linux `setpriv` (cross-UID/group probes), plus privileges sufficient to switch UID/GID and supplementary groups. These are Linux gate tools, not plugin dependencies; the gate does not install tools or change system groups/accounts.
 - The deployment target is Linux. The lease layer spawns the `flock(1)` helper, so the test suite needs it on `PATH`; on macOS it comes from Homebrew, which installs util-linux keg-only and therefore does **not** link `flock` into `PATH` for you:
 
@@ -269,7 +269,7 @@ npm publish ./zapsaang-dsh-web-bridge-0.1.0-alpha.1.tgz --tag alpha --access pub
 
 ### npm Trusted Publisher
 
-Once the package exists, configure the Trusted Publisher on the `@zapsaang/dsh-web-bridge` npm package for the next unpublished version: GitHub owner `zapsaang`, repository `dsh-web-bridge` (the npm scope and the repository name deliberately differ — the package is scoped, the repo is not), workflow filename `publish.yml`, and an **empty** Environment field; on new settings select **Allow npm publish** (stage-only is the default). The workflow deliberately declares no `environment:`, so the two sides must stay consistent — naming an environment here that the job does not use (or the reverse) makes npm reject the OIDC exchange. A separate dist-tag permission exists but is neither needed nor granted for publishing with `--tag alpha`. An initial successful OIDC release must land within 2 days of configuration or it expires and must be recreated. See https://docs.npmjs.com/trusted-publishers/.
+Once the package exists, configure the Trusted Publisher on the `@zapsaang/dsh-web-bridge` npm package for the next unpublished version: GitHub owner `zapsaang`, repository `dsh-web-bridge` (the npm scope and the repository name deliberately differ — the package is scoped, the repo is not), workflow filename `publish.yml`, and an **empty** Environment field; on new settings select **Allow npm publish** and also enable **Allow npm dist-tag** (stage-only is the default); the dist-tag permission is what lets the `promote-latest` job move `latest` over OIDC, and it is independent of the publish permission. The workflow deliberately declares no `environment:`, so the two sides must stay consistent — naming an environment here that the job does not use (or the reverse) makes npm reject the OIDC exchange. Existing connections cannot change their provider fields, but their allowed actions can be updated in place; if the settings UI refuses the change, delete and recreate the connection and land the next publish within 48 hours to validate it. An initial successful OIDC release must land within 2 days of configuration or it expires and must be recreated. See https://docs.npmjs.com/trusted-publishers/.
 
 ### Release workflow (`.github/workflows/publish.yml`)
 
@@ -283,9 +283,15 @@ git push origin v0.1.0-alpha.2
 ```
 
 - The tag must point at a commit that is already on `main`: `verify` re-checks ancestry with `git merge-base --is-ancestor` against `origin/main`, which is why its checkout uses `fetch-depth: 0`. It must also contain the workflow file you intend to run — a tag on an older commit runs that commit's workflow revision.
-- Keep the trigger in `publish.yml`. The npm Trusted Publisher is bound to that workflow **filename** (plus its empty environment field), so a second workflow file would require reconfiguring the publisher (and an initial OIDC publish within 2 days of that change).
+- Keep the trigger in `publish.yml`. The npm Trusted Publisher is bound to that workflow **filename** (plus its empty environment field), so a second workflow file would require reconfiguring the publisher (and an initial OIDC publish within 2 days of that change). That is also why `promote-latest` is a job in this file rather than its own workflow.
 - Job `verify`: full gates (typecheck/build/default tests plus the explicit compiled DSH and browser suites), project-pinned Chromium install, and the compiled privileged formal Linux A7-A9 matrix via `sudo` with the pinned Node path, then real `npm pack` and tarball inspection, `npm publish <tarball> --dry-run`, uploads the tarball as an artifact. A BLOCKED formal gate stops the job before packing; deployment A10 is separate.
 - Job `publish`: runs when the trigger is a tag, or when a dispatch passes `publish: true` on `main`; permissions `contents: read, id-token: write`; OIDC Trusted Publisher authentication, no `NPM_TOKEN`. Publishes the exact verified tarball artifact (checksum re-verified), never a rebuild.
+- Job `promote-latest`: runs only after `publish` succeeded. It reads the registry's current `latest`, derives the channel of the released version from its version string (`alpha` for `-alpha.N`, `rc` for `-rc.N`, `stable` for no suffix), and runs `npm dist-tag add @zapsaang/dsh-web-bridge@<version> latest` only when the channels match **and** the released version is newer than the current `latest`. Any other state — no `latest`, an unparsable current tag such as `0.0.0-stage`, an equal or older version, or a channel change — is a no-op that exits 0 with the reason in the run summary. It authenticates with OIDC (`contents: read, id-token: write`, no `NPM_TOKEN`) and installs `npm@11.21.1` because Node 24.21.0's npm 11.19.0 cannot manage dist-tags over OIDC; the publish job keeps using the bundled npm. The job is idempotent, so if it fails after the publish succeeded, `Re-run failed jobs` re-runs only `promote-latest`.
+- `latest` is channel-local: it never jumps from alpha to rc or stable, or back. Switching channels (for example, letting the first stable release take over) is a deliberate maintainer action with an authenticated CLI, after which CI keeps `latest` on the new channel:
+
+```sh
+npm dist-tag add @zapsaang/dsh-web-bridge@<version> latest
+```
 - There is no GitHub Environment, so a tag push publishes **unattended** — no approval step, matching the tag-triggered OIDC setup in the other `zapsaang` npm packages. The gates on this path are the deliberate tag push itself, job `verify`, and the release guard's requirement that the tag name equals the reviewed `package.json` version. Restoring a required-reviewer gate means re-adding `environment: npm` here, setting the same environment in the npm Trusted Publisher config, and allowing the `v*` tag pattern under that environment's "Deployment branches and tags" — a `main`-only rule there blocks a tag-triggered job before OIDC runs.
 - Automatic provenance applies only when **both** the GitHub repository and the npm package are public.
 - After an authorized publish, verify separately, e.g. for `0.1.0-alpha.2`:
@@ -295,8 +301,8 @@ npm view @zapsaang/dsh-web-bridge@0.1.0-alpha.2 version dist.attestations --json
 npm view @zapsaang/dsh-web-bridge dist-tags --json
 ```
 
-  and inspect the version page (https://www.npmjs.com/package/@zapsaang/dsh-web-bridge/v/0.1.0-alpha.2) for the provenance indicator.
+  and inspect the version page (https://www.npmjs.com/package/@zapsaang/dsh-web-bridge/v/0.1.0-alpha.2) for the provenance indicator. The `promote-latest` job records the current `latest`, the released version, and the move/skip reason in the run summary; `npm view @zapsaang/dsh-web-bridge dist-tags --json` is the registry-side check.
 
 ### Installing from npm
 
-Check what actually exists: `npm view @zapsaang/dsh-web-bridge dist-tags --json`. Prefer explicit versions (`@zapsaang/dsh-web-bridge@0.1.0-alpha.5`) or `@alpha`; on a first publication the tag layout can vary, so inspect the registry rather than assuming `latest` exists or that `alpha` can never point at the newest version. There is no promotion-to-`latest` workflow.
+Check what actually exists: `npm view @zapsaang/dsh-web-bridge dist-tags --json`. Prefer explicit versions (`@zapsaang/dsh-web-bridge@0.1.0-alpha.5`) or `@alpha`; on a first publication the tag layout can vary, so inspect the registry rather than assuming `latest` exists or that `alpha` can never point at the newest version. `latest` is moved automatically by CI only inside the channel it already points at; changing channels is a manual maintainer action.
