@@ -56,7 +56,7 @@ function checkOverlay() {
 function checkNginx(socketPath, authority) {
   const text = read('examples/nginx.conf');
   for (const [needle, message] of [
-    [`server unix:${socketPath}:;`, 'nginx upstream must target the overlay socket'],
+    [`server unix:${socketPath};`, 'nginx upstream must target the overlay socket'],
     ['proxy_pass http://dsh_bridge;', 'nginx must proxy to the bridge upstream'],
     ['proxy_set_header Host $http_host;', 'nginx must preserve the exact Host (including an explicit port)'],
     ['proxy_set_header Authorization "";', 'nginx must clear access-layer credentials'],
