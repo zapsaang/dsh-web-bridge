@@ -1,4 +1,4 @@
-name: Publish alpha
+name: Publish release package
 
 on:
   push:
@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       expected_version:
-        description: Exact X.Y.Z-alpha.N version in package.json
+        description: Exact X.Y.Z-(alpha|rc).N version in package.json
         required: true
         type: string
       publish:
@@ -18,7 +18,7 @@ on:
 permissions: {}
 
 concurrency:
-  group: npm-alpha-release
+  group: npm-package-release
   cancel-in-progress: false
 
 jobs:
@@ -43,7 +43,14 @@ jobs:
         shell: bash
         run: |
           if [ "${GITHUB_REF_TYPE}" = tag ]; then version="${GITHUB_REF_NAME#v}"; else version="$DISPATCH_VERSION"; fi
+          if [[ "$version" =~ -(alpha|rc)\. ]]; then
+            channel="${BASH_REMATCH[1]}"
+          else
+            echo "::error::Cannot determine release channel from version: $version"
+            exit 1
+          fi
           printf 'EXPECTED_VERSION=%s\n' "$version" >> "$GITHUB_ENV"
+          printf 'CHANNEL=%s\n' "$channel" >> "$GITHUB_ENV"
       - name: A release tag must point into main
         if: github.ref_type == 'tag'
         shell: bash
@@ -108,7 +115,7 @@ jobs:
           npm pack --pack-destination "$output"
           tarball=$(node scripts/check-release.mjs --pack-dir "$output")
           mv "$tarball" "$output/release.tgz"
-          npm publish "$output/release.tgz" --dry-run --ignore-scripts --tag alpha --access public --registry https://registry.npmjs.org/
+          npm publish "$output/release.tgz" --dry-run --ignore-scripts --tag "$CHANNEL" --access public --registry https://registry.npmjs.org/
           (cd "$output" && sha256sum release.tgz > SHA256SUMS)
           read -r checksum _ < "$output/SHA256SUMS"
           printf 'sha256=%s\npath=%s\n' "$checksum" "$output" >> "$GITHUB_OUTPUT"
@@ -116,7 +123,7 @@ jobs:
         id: upload
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: npm-alpha-${{ github.run_id }}-${{ github.run_attempt }}
+          name: npm-release-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ steps.pack.outputs.path }}/
           if-no-files-found: error
           retention-days: 7
@@ -152,11 +159,19 @@ jobs:
         shell: bash
         run: |
           if [ "${GITHUB_REF_TYPE}" = tag ]; then version="${GITHUB_REF_NAME#v}"; else version="$DISPATCH_VERSION"; fi
+          if [[ "$version" =~ -(alpha|rc)\. ]]; then
+            channel="${BASH_REMATCH[1]}"
+          else
+            echo "::error::Cannot determine release channel from version: $version"
+            exit 1
+          fi
           printf 'EXPECTED_VERSION=%s\n' "$version" >> "$GITHUB_ENV"
+          printf 'CHANNEL=%s\n' "$channel" >> "$GITHUB_ENV"
           printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"
+          printf 'channel=%s\n' "$channel" >> "$GITHUB_OUTPUT"
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
-          name: npm-alpha-${{ github.run_id }}-${{ github.run_attempt }}
+          name: npm-release-${{ github.run_id }}-${{ github.run_attempt }}
           path: release-artifact
       - name: Verify checksum, packed manifest and bundled npm
         env:
@@ -175,7 +190,7 @@ jobs:
           JS
       - name: Publish the same verified tarball with automatic OIDC provenance
         shell: bash
-        run: npm publish "$GITHUB_WORKSPACE/release-artifact/release.tgz" --ignore-scripts --tag alpha --access public --registry https://registry.npmjs.org/
+        run: npm publish "$GITHUB_WORKSPACE/release-artifact/release.tgz" --ignore-scripts --tag "$CHANNEL" --access public --registry https://registry.npmjs.org/
 
   promote-latest:
     needs: publish
