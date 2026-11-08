@@ -53,10 +53,11 @@ export async function temporaryHome(): Promise<string> {
 }
 
 export class Harness implements AsyncDisposable {
-  // Lifecycle operations must target the raw Fiber, not the ctx.plugin()
-  // PromiseLike wrapper: restart() on the wrapper writes state onto the
-  // wrapper while services stay registered on the raw fiber (cordis
-  // 4.0.5 registry.ts wrapped=Object.create(fiber)); see T-DSH4b.
+  // Lifecycle operations reload through ctx.plugin()'s PromiseLike wrapper.
+  // Cordis 4.0.5 wrote restart() state onto the wrapper and left the raw
+  // fiber ACTIVE, reactivating consumers before async Service.init settled;
+  // 4.1.0 routes restart() through ctx.fiber and awaits it. T-DSH4b pins the
+  // fixed ordering, so reload() may keep using this wrapper handle.
   private constructor(readonly ctx: Context, readonly connectionFiber: Awaited<ReturnType<Context['plugin']>>) {}
 
   static async start(home: string, trustedHosts: readonly string[] = [authority]): Promise<Harness> {

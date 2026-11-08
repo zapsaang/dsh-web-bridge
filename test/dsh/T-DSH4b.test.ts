@@ -7,14 +7,14 @@ declare module '@deepseek-ai/cordis' {
   interface Context { nativeProbeB: { readonly ready: boolean }; }
 }
 
-// Permanent negative record of a confirmed upstream pitfall in
-// @deepseek-ai/cordis 4.0.5: ctx.plugin() returns a PromiseLike
-// wrapper (registry.ts: wrapped = Object.create(fiber)). Calling restart()
-// on the wrapper writes lifecycle state onto the wrapper while services stay
-// registered on the raw fiber, whose state wrongly remains ACTIVE; required
-// consumers then reactivate before the second async Service.init completes.
-// This test pins the defect behavior so a future upstream fix flips it red.
-test('T-DSH4b wrapper restart reactivates required consumer before async init completes (known upstream pitfall)', async () => {
+// Compatibility canary for the ctx.plugin() PromiseLike wrapper. Cordis 4.0.5
+// had a defect: restart() on the wrapper wrote lifecycle state onto the wrapper
+// while services stayed on the raw fiber, so required consumers reactivated
+// before the second async Service.init completed. Cordis 4.1.0 routes
+// restart() through ctx.fiber and awaits the raw fiber, so the consumer now
+// observes the service only after init settles. This test pins the fixed
+// behavior; a regression flips it red.
+test('T-DSH4b wrapper restart awaits async Service.init before reactivating required consumers', async () => {
   // Given
   await using app = await isolated();
   const gate = Promise.withResolvers<void>();
@@ -40,6 +40,6 @@ test('T-DSH4b wrapper restart reactivates required consumer before async init co
   await new Promise(resolve => setImmediate(resolve));
   gate.resolve();
   await restarted;
-  // Then: the consumer observed the not-ready service (defect behavior).
-  assert.equal(observedReady, false);
+  // Then: the consumer observed the ready service (fixed in cordis 4.1.0).
+  assert.equal(observedReady, true);
 });
