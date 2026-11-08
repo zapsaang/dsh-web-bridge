@@ -58,14 +58,14 @@ export function stripRetryMarker(target: string): string {
 }
 
 export function classifyRequest(request: RequestHead, authorities: readonly string[]): 400 | 403 | undefined {
-  // Node keeps the first duplicate Host and DSH parses that same value, so the
-  // bridge must judge the first one too: rejecting duplicates would be stricter
-  // than the fence this request is about to pass.
-  const host = rawHeaderValues(request.rawHeaders, 'host')[0];
+  // RFC 9112 Section 7.2: reject duplicate or missing Host headers with 400 Bad Request to prevent request smuggling.
+  const hostHeaders = rawHeaderValues(request.rawHeaders, 'host');
+  const host = hostHeaders[0];
+  if (hostHeaders.length !== 1 || host === undefined) return 400;
   // One parser decides syntax for both the configured list and the wire Host,
   // mirroring DSH's WHATWG URL handling. A bare entry matches any port; an
   // explicit `host:port` entry is exact.
-  const authority = host === undefined ? undefined : parseAuthority(host);
+  const authority = parseAuthority(host);
   if (!isOriginFormTarget(request.target) || authority === undefined ||
     hasTokenQuery(request.target)) return 400;
   try {

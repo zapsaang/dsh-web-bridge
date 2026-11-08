@@ -112,7 +112,7 @@ describe('T-H3 exchange failure matrix resumes the original 401', () => {
 
   for (const [name, exchange] of [
     ['non-303 status', head(200, { 'set-cookie': VALID_COOKIE })],
-    ['Location other than ./', head(303, { location: '/', 'cache-control': 'no-store', 'referrer-policy': 'no-referrer', 'set-cookie': VALID_COOKIE })],
+    ['malformed Location URI-reference', head(303, { location: 'http://[::1', 'cache-control': 'no-store', 'referrer-policy': 'no-referrer', 'set-cookie': VALID_COOKIE })],
     ['missing cache-control', head(303, { location: './', 'referrer-policy': 'no-referrer', 'set-cookie': VALID_COOKIE })],
     ['missing referrer-policy', head(303, { location: './', 'cache-control': 'no-store', 'set-cookie': VALID_COOKIE })],
     ['missing Set-Cookie', head(303, { location: './', 'cache-control': 'no-store', 'referrer-policy': 'no-referrer' })],

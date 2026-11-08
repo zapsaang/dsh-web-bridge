@@ -30,7 +30,7 @@ export function validateExchangeSetCookie(headers: RawHeaders): string | undefin
   }
   const expires = attributes.get('expires');
   if (!attributes.has('httponly') || attributes.get('httponly') !== undefined ||
-    attributes.get('secure') !== undefined || attributes.get('path') !== '/' ||
+    attributes.get('path') !== '/' ||
     attributes.get('samesite')?.toLowerCase() !== 'strict' ||
     !/^[1-9][0-9]*$/.test(attributes.get('max-age') ?? '') ||
     expires === undefined || !IMF_FIXDATE.test(expires) || new Date(expires).toUTCString() !== expires) return undefined;

@@ -5,6 +5,19 @@ import { rawHeaderValues } from './headers.js';
 /** §8.3 pinned exchange budget; hard TOTAL deadline from before the URL factory call (§6). */
 export const EXCHANGE_TIMEOUT = 2_000;
 
+/** RFC 3986 / RFC 9110: valid URI-reference without control characters or whitespace. */
+export function isValidUriReference(value: string): boolean {
+  if (value.length === 0 || [...value].some(character => character.charCodeAt(0) <= 32 || character.charCodeAt(0) === 127)) {
+    return false;
+  }
+  try {
+    new URL(value, 'http://127.0.0.1/');
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export interface ExchangeEndpoint {
   readonly port: number;
   readonly authenticatedUrl: (baseUrl: string) => string;
@@ -68,8 +81,9 @@ export function exchange(input: ExchangeInput): Promise<ExchangeResult> {
       const referrerPolicies = rawHeaderValues(exchangeResponse.rawHeaders, 'referrer-policy');
       const setCookie = validateExchangeSetCookie(exchangeResponse.rawHeaders);
       exchangeResponse.destroy();
+      const location = locations[0];
       const headValid = exchangeResponse.statusCode === 303 &&
-        locations.length === 1 && locations[0] === './' &&
+        locations.length === 1 && location !== undefined && isValidUriReference(location) &&
         cacheControls.length === 1 && cacheControls[0] === 'no-store' &&
         referrerPolicies.length === 1 && referrerPolicies[0] === 'no-referrer';
       if (!headValid) {

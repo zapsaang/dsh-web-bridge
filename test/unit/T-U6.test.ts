@@ -45,10 +45,10 @@ for (const [rawHeaders, target, authorities, expected] of [
   [['Host', 'ExAmPlE.com'], '/', ['example.com'], undefined],
   [['Host', 'other.com'], '/', ['example.com'], 403],
   [[], '/', ['example.com'], 400],
-  // Node keeps the first duplicate Host and DSH parses that same value.
-  [['Host', 'example.com', 'host', 'example.com'], '/', ['example.com'], undefined],
-  [['Host', 'example.com', 'host', 'other.com'], '/', ['example.com'], undefined],
-  [['Host', 'other.com', 'host', 'example.com'], '/', ['example.com'], 403],
+  // RFC 9112 §7.2: duplicate Host headers rejected with 400 Bad Request to prevent request smuggling.
+  [['Host', 'example.com', 'host', 'example.com'], '/', ['example.com'], 400],
+  [['Host', 'example.com', 'host', 'other.com'], '/', ['example.com'], 400],
+  [['Host', 'other.com', 'host', 'example.com'], '/', ['example.com'], 400],
   [['Host', 'example.com:443'], '/', ['example.com'], undefined],
   [['Host', 'example.com:8443'], '/', ['example.com'], undefined],
   [['Host', 'example.com:0'], '/', ['example.com'], undefined],

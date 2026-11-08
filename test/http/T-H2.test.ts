@@ -188,4 +188,37 @@ describe('T-H2 exchange mechanics and bootstrap response', () => {
       await upstream.close();
     }
   });
+
+  test('exchange accepting Location: / and native Secure cookie bootstraps successfully', async () => {
+    // Given an upstream whose exchange outputs Location: / and native Secure
+    const upstream = await startUpstream((request, response) => {
+      if ((request.url ?? '').startsWith('/?token=')) {
+        response.writeHead(303, [
+          'location', '/',
+          'cache-control', 'no-store',
+          'referrer-policy', 'no-referrer',
+          'set-cookie', SECURED_COOKIE,
+        ]);
+        response.end();
+        return;
+      }
+      response.writeHead(401, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' });
+      response.end('dsh web authentication required\n');
+    });
+    const runtime = makeRuntime(upstream.port, {
+      endpoint: { port: upstream.port, authenticatedUrl: () => `http://127.0.0.1:${upstream.port}/?token=stub-token-5` },
+    });
+    const bridge = await startBridge(runtime);
+    try {
+      const response = await callBridge(bridge.port, {
+        headers: { host: 'dsh.example.com', 'sec-fetch-mode': 'navigate', 'sec-fetch-dest': 'document' },
+      });
+      assert.equal(response.status, 200);
+      assert.ok(headerValue(response.rawHeaders, 'set-cookie')?.includes(SECURED_COOKIE));
+      assert.equal(upstream.requests.length, 2);
+    } finally {
+      await bridge.close();
+      await upstream.close();
+    }
+  });
 });
