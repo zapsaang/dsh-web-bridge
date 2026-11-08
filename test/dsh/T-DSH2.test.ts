@@ -128,8 +128,8 @@ for (const [name, exchange] of [
     response.writeHead(200, { 'set-cookie': cookie });
     response.end();
   }],
-  ['Location drift', (response: ServerResponse, cookie: string) => {
-    response.writeHead(303, { location: '/', 'cache-control': 'no-store', 'referrer-policy': 'no-referrer', 'set-cookie': cookie });
+  ['malformed Location URI-reference', (response: ServerResponse, cookie: string) => {
+    response.writeHead(303, { location: 'http://[::1', 'cache-control': 'no-store', 'referrer-policy': 'no-referrer', 'set-cookie': cookie });
     response.end();
   }],
   ['missing Set-Cookie', (response: ServerResponse) => {
