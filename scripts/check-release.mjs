@@ -4,8 +4,12 @@ import { readFileSync, readdirSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 const expected = process.env.EXPECTED_VERSION;
-assert.ok(typeof expected === 'string' && /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)-alpha\.(0|[1-9]\d*)$/.test(expected),
-  'expected version must be X.Y.Z-alpha.N without leading zeros');
+const channelMatch = typeof expected === 'string'
+  ? expected.match(/^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)-(alpha|rc)\.(?:0|[1-9]\d*)$/)
+  : null;
+assert.ok(channelMatch !== null,
+  'expected version must be X.Y.Z-(alpha|rc).N without leading zeros');
+const channel = channelMatch[1];
 
 const ref = process.env.GITHUB_REF ?? '';
 const tag = ref.startsWith('refs/tags/') ? ref.slice('refs/tags/'.length) : null;
@@ -36,6 +40,6 @@ assert.ok(manifest !== null && typeof manifest === 'object' && !Array.isArray(ma
 assert.equal(manifest.name, '@zapsaang/dsh-web-bridge', 'release identity mismatch');
 assert.equal(manifest.version, expected, 'release version mismatch');
 assert.equal(manifest.publishConfig?.access, 'public', 'publishConfig.access must be public');
-assert.equal(manifest.publishConfig?.tag, 'alpha', 'publishConfig.tag must be alpha');
+assert.equal(manifest.publishConfig?.tag, channel, `publishConfig.tag must be ${channel}`);
 assert.equal(manifest.publishConfig?.registry, 'https://registry.npmjs.org/', 'publishConfig.registry must be npm');
 if (tarball) console.log(tarball);

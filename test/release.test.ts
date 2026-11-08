@@ -12,18 +12,31 @@ const manifest = {
   publishConfig: { access: 'public', tag: 'alpha', registry: 'https://registry.npmjs.org/' },
 } as const;
 
+const rcVersion = '0.1.0-rc.1';
+const rcManifest = {
+  name: '@zapsaang/dsh-web-bridge', version: rcVersion,
+  publishConfig: { access: 'public', tag: 'rc', registry: 'https://registry.npmjs.org/' },
+} as const;
+
 const cases = [
   { name: 'valid alpha', json: manifest, expected: version, ref: 'refs/heads/main', code: 0 },
+  { name: 'valid rc', json: rcManifest, expected: rcVersion, ref: 'refs/heads/main', code: 0 },
+  { name: 'valid rc tag', json: rcManifest, expected: rcVersion, ref: `refs/tags/v${rcVersion}`, code: 0 },
+  { name: 'channel mismatch (rc version with alpha tag)', json: { ...manifest, version: rcVersion }, expected: rcVersion, code: 1 },
+  { name: 'channel mismatch (alpha version with rc tag)', json: { ...rcManifest, version }, expected: version, code: 1 },
   { name: 'wrong identity', json: { ...manifest, name: 'other-package' }, code: 1 },
   { name: 'version mismatch', expected: '0.1.0-alpha.2', code: 1 },
   { name: 'stable version', json: { ...manifest, version: '0.1.0' }, expected: '0.1.0', code: 1 },
-  { name: 'rc version', json: { ...manifest, version: '0.1.0-rc.1' }, expected: '0.1.0-rc.1', code: 1 },
+  { name: 'beta version', json: { ...manifest, version: '0.1.0-beta.1' }, expected: '0.1.0-beta.1', code: 1 },
   { name: 'alpha with build metadata', json: { ...manifest, version: `${version}+build` }, expected: `${version}+build`, code: 1 },
+  { name: 'rc with build metadata', json: { ...rcManifest, version: `${rcVersion}+build` }, expected: `${rcVersion}+build`, code: 1 },
   { name: 'leading-zero alpha', json: { ...manifest, version: '0.1.0-alpha.01' }, expected: '0.1.0-alpha.01', code: 1 },
+  { name: 'leading-zero rc', json: { ...rcManifest, version: '0.1.0-rc.01' }, expected: '0.1.0-rc.01', code: 1 },
   { name: 'branch ref', ref: 'refs/heads/topic', code: 1 },
   { name: 'release tag', ref: `refs/tags/v${version}`, code: 0 },
   { name: 'unprefixed release tag', ref: `refs/tags/${version}`, code: 0 },
   { name: 'mismatched release tag', ref: 'refs/tags/v0.1.0-alpha.9', code: 1 },
+  { name: 'rc mismatched release tag', json: rcManifest, expected: rcVersion, ref: 'refs/tags/v0.1.0-rc.9', code: 1 },
   { name: 'missing expected version', expected: '', code: 1 },
   { name: 'missing ref', ref: '', code: 1 },
   { name: 'missing publish defaults', json: { name: manifest.name, version }, code: 1 },
