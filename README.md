@@ -100,7 +100,7 @@ Runtime: Node `>=24.21.0 <25` plus the util-linux `flock` system tool.
 Install into the web profile (the CLI forwards the remaining arguments to pnpm inside the profile directory):
 
 ```sh
-dsh plugin --profile web add @zapsaang/dsh-web-bridge@0.1.0-alpha.6
+dsh plugin --profile web add @zapsaang/dsh-web-bridge@0.1.0-alpha.7
 ```
 
 Prefer an explicit version or `@alpha`, and check `npm view @zapsaang/dsh-web-bridge dist-tags --json` instead of assuming which tag points at the newest release.
@@ -118,7 +118,7 @@ Prefer an explicit version or `@alpha`, and check `npm view @zapsaang/dsh-web-br
 
 The shipped bundle carries **only** `socketPath`. It deliberately ships no example authorities: the row loads, then the plugin fails with an actionable error until a deployment overlay supplies at least one authority, so a placeholder domain can never silently become a real deployment. Copy [`examples/overlay.example.yml`](https://github.com/zapsaang/dsh-web-bridge/blob/main/examples/overlay.example.yml) and replace the example host. Omitting `socketAccess` selects the default **strict** socket mode.
 
-> **Upgrading from `0.1.0-alpha.6`:** that version ships `authorities: [dsh.example.com, dsh2.example.com]` in the bundle and accepts only bare DNS names. Add an overlay (the example above) when you upgrade; existing bare DNS authorities keep working unchanged.
+> **Upgrading from `0.1.0-alpha.6`:** that version ships `authorities: [dsh.example.com, dsh2.example.com]` in the bundle and accepts only bare DNS names. As of `0.1.0-alpha.7`, the bundle ships without default authorities: add a deployment overlay with your own authorities before restarting.
 
 Installing the package is not the same as enabling it: CLI bundle selection comes from the plugin-manager reconcile — a newly added bundle with `dsh.bundle` metadata is selected by default, an already-installed-but-disabled dependency is **not** re-enabled, and a package without `dsh.bundle` metadata stays a plain dependency. A live process is not readiness either; see [Security Model](#security-model).
 
@@ -304,7 +304,7 @@ Verified `Host`, `Origin`, and fetch-metadata values are forwarded **unchanged**
 
 - **Hop-by-hop (RFC):** `connection`, `keep-alive`, `proxy-authenticate`, `proxy-authorization`, `te`, `trailer`, `transfer-encoding`, `upgrade` — removed in both directions, together with any field named by `Connection`.
 - **Proxy identity token:** `cf-access-jwt-assertion` is stripped in both directions as defensive sanitation. The bridge never verifies an Access JWT and never treats that header as proof of identity.
-- **`Authorization`:** stripped on the request direction as of `0.1.0-alpha.8`; the response direction is deliberately untouched. It is never an input to the bootstrap decision and only needed protection from `Connection` smuggling. The DSH web stack (`dsh-client-connection`, `dsh-host-webserver`, `dsh-web-app`) does not consume the header for authentication today; stripping it keeps proxy Basic/OIDC credentials out of the DSH process. If DSH ever introduces `Authorization`-based auth, land a DSH contract test before relaxing this. Proxies should still terminate and clear it explicitly (Nginx `proxy_set_header Authorization "";`, Caddy `header_up -Authorization`) as defense in depth.
+- **`Authorization`:** stripped on the request direction as of `0.1.0-alpha.7`; the response direction is deliberately untouched. It is never an input to the bootstrap decision and only needed protection from `Connection` smuggling. The DSH web stack (`dsh-client-connection`, `dsh-host-webserver`, `dsh-web-app`) does not consume the header for authentication today; stripping it keeps proxy Basic/OIDC credentials out of the DSH process. If DSH ever introduces `Authorization`-based auth, land a DSH contract test before relaxing this. Proxies should still terminate and clear it explicitly (Nginx `proxy_set_header Authorization "";`, Caddy `header_up -Authorization`) as defense in depth.
 - **Cookies:** request `Cookie` headers are forwarded untouched and never parsed. On responses, the only change to any `Set-Cookie` value is an idempotently appended `Secure` on `dsh-auth-*` names; the rest of the value is preserved byte-for-byte.
 
 ### Session bootstrap security rules
@@ -479,9 +479,13 @@ If DSH removes or changes any of these, the bridge must stop auto-bootstrap and 
 
 **DSH 0.2.2-rc.1 migration.** The 0.2.1-rc contract is unchanged: the connection-owned Host/Origin fence, `authenticatedUrl()`, `ctx.webServer.host/port`, and the token-exchange/401 semantics all still match. The peer pins move together to DSH `0.2.2-rc.1`, Cordis `4.1.0`, and Schemastery `3.19.0`. Cordis 4.1.0 fixes the `ctx.plugin()` wrapper-`restart()` defect that T-DSH4b used to pin, so that test now asserts the fixed ordering (consumers see the service only after its async `Service.init` settles).
 
-**`0.1.0-alpha.7` authority migration.** `authorities` now accepts ports, IPv4, bracketed IPv6, and `localhost`. A bare name matches any port and a `host:port` entry is exact, mirroring DSH; loopback names no longer need a `connection.trustedHosts` entry. The shipped bundle no longer carries example domains, so an overlay is mandatory. A port-bearing `Host` that previously got `400` can now match a bare authority, and a port-specific trusted entry can no longer stand in for a bare authority. Roll back by reverting the version and restoring the previous overlay.
+### 0.1.0-alpha.7 Migration (from 0.1.0-alpha.6)
 
-**`0.1.0-alpha.8` header migration.** `Authorization` is now stripped on the request direction; the response direction is unchanged. A deployment that relied on forwarding it to DSH must terminate authentication at the proxy instead (DSH does not consume the header). `Cf-Access-Jwt-Assertion` remains stripped in both directions. Rollback: revert the version — the previous build forwarded `Authorization` verbatim.
+Version `0.1.0-alpha.7` rolls up architecture improvements since `0.1.0-alpha.6`:
+1. **Authority syntax & empty bundle default:** `authorities` now accepts ports, IPv4, bracketed IPv6, and `localhost`. The shipped bundle no longer carries placeholder example domains; a deployment overlay is mandatory.
+2. **Header boundary:** Inbound `Authorization` is stripped on the request direction to keep proxy credentials out of DSH; response direction is untouched. Inbound `Via: 1.1 dsh-web-bridge` is appended upstream per RFC 9110.
+3. **Network conformance:** Strict 400 rejection on duplicate Host headers (RFC 9112 Section 7.2) and seamless IPv6 loopback (`::1`) upstream proxying.
+4. **Socket permissions:** Socket directory permissions admit `0770` / `02770` group sharing and Linux sticky `/tmp`.
 
 ### Upgrade checklist
 

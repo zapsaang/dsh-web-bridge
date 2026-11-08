@@ -214,7 +214,7 @@ Record the Cloudflare-side results with date, `cloudflared` version, and zone;
 - **The bridge does not trust identity headers.** `Cf-Access-Jwt-Assertion` is
   stripped in both directions as defensive sanitation; it never grants standing,
   and the bridge never verifies an Access JWT. Cloudflare's own verifier does.
-  `Authorization` is stripped on the request direction as of `0.1.0-alpha.8`
+  `Authorization` is stripped on the request direction as of `0.1.0-alpha.7`
   (the response direction is untouched).
 - **Cookies pass through.** The bridge forwards the `Cookie` header untouched and
   appends `Secure` to `dsh-auth-*` `Set-Cookie` values. It does not strip a

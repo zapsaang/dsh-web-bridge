@@ -46,8 +46,8 @@ Run the formal entry on a privileged Linux runner before packing, not as a skipp
 
 ```sh
 npm pack                                              # real tarball
-tar -tzf ./zapsaang-dsh-web-bridge-0.1.0-alpha.6.tgz  # inspect contents
-npm publish ./zapsaang-dsh-web-bridge-0.1.0-alpha.6.tgz --dry-run --tag alpha --access public --registry https://registry.npmjs.org/
+tar -tzf ./zapsaang-dsh-web-bridge-0.1.0-alpha.7.tgz  # inspect contents
+npm publish ./zapsaang-dsh-web-bridge-0.1.0-alpha.7.tgz --dry-run --tag alpha --access public --registry https://registry.npmjs.org/
 ```
 
 Do not pass `--provenance` locally; provenance comes from CI OIDC only, and a dry run is not proof of authentication or provenance. Per the npm docs, a relative tarball/folder package-spec must begin with an explicit `./` prefix; absolute paths are also accepted.
@@ -76,7 +76,7 @@ Fresh compiled configuration/group checks passed **24/24**, and readiness checks
 
 ## Releasing
 
-Maintainer instructions, not a record of completed actions. The package already exists on the registry — the maintainer bootstrapped it interactively (`0.0.0-stage` placeholder, then `0.1.0-alpha.1`), so releases now go through the tag-triggered workflow below. Published versions are immutable; every fix needs a new version — current `0.1.0-alpha.6`; the generalization work lands as `0.1.0-alpha.7` (authority syntax, authority-free bundle) and `0.1.0-alpha.8` (header boundary, request-direction `Authorization` stripping). README changes only reach the npm page if they land before packing/publishing that version.
+Maintainer instructions, not a record of completed actions. The package already exists on the registry — the maintainer bootstrapped it interactively (`0.0.0-stage` placeholder, then `0.1.0-alpha.1`), so releases now go through the tag-triggered workflow below. Published versions are immutable; every fix needs a new version — current 0.1.0-alpha.7; rolls up authority generalization, header boundary enforcement, and HTTP conformance. README changes only reach the npm page if they land before packing/publishing that version.
 
 The published name is **scoped** (`@zapsaang/dsh-web-bridge`). npm rejects the unscoped `dsh-web-bridge` with a 403 because it is too similar to the existing `dsh-webbridge` package, and that similarity check cannot be appealed — so do not "simplify" the name back to unscoped. The scope is also part of the Cordis load contract: the profile loader resolves the patch row's `name` as a bare module specifier, so `package.json`, `cordis.patch.yml`, and the plugin's exported `name` must always move together. The unscoped name has never been published; the bootstrap created the scoped `@zapsaang/dsh-web-bridge`.
 
