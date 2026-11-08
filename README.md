@@ -2,7 +2,7 @@
 
 > **Unix domain socket reverse proxy and automatic native session bootstrap for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (DSH) Web, packaged as a Cordis plugin.**
 
-> **Status: experimental alpha.** The pinned peers below are a compatibility proposal, not a support claim, and several deployment verification gates are NOT RUN or PARTIAL — see [Compatibility](#compatibility) before treating any of this as supported.
+> **Status: Release Candidate (0.1.0-rc.1).** Production-ready reverse proxy contract with strict Unix socket lifecycle, native DSH session bootstrap, and multi-channel publishing verification. Pinned peers remain a verified compatibility baseline — see [Compatibility](#compatibility) before treating any of this as supported.
 
 The bridge runs inside the DSH process, listens only on a Unix domain socket, and forwards to the DSH web server over loopback. Any access layer that can speak HTTP/1.1 over a Unix socket can front it: Nginx, Caddy, Cloudflare Tunnel, HAProxy, a local proxy, or a trusted local client. TLS, remote authentication, and access control stay in that layer. The bridge's own job is narrower: expose the socket safely, enforce an explicit Host allowlist, and complete DSH's native token exchange locally when a browser's page navigation hits `401` — so launch tokens never leave the machine and never appear in a remote URL, log, or address bar.
 
@@ -100,10 +100,10 @@ Runtime: Node `>=24.21.0 <25` plus the util-linux `flock` system tool.
 Install into the web profile (the CLI forwards the remaining arguments to pnpm inside the profile directory):
 
 ```sh
-dsh plugin --profile web add @zapsaang/dsh-web-bridge@0.1.0-alpha.7
+dsh plugin --profile web add @zapsaang/dsh-web-bridge@0.1.0-rc.1
 ```
 
-Prefer an explicit version or `@alpha`, and check `npm view @zapsaang/dsh-web-bridge dist-tags --json` instead of assuming which tag points at the newest release.
+Prefer an explicit version or `@rc`, and check `npm view @zapsaang/dsh-web-bridge dist-tags --json` instead of assuming which tag points at the newest release.
 
 **Activation mechanism.** `package.json` carries `dsh.bundle.patch: ["./cordis.patch.yml"]`; the profile loader reads that metadata and applies the shipped patch as one bundle layer. The patch is a single append-mode `insert` row:
 
@@ -478,6 +478,14 @@ If DSH removes or changes any of these, the bridge must stop auto-bootstrap and 
 **DSH 0.2.1-rc migration.** The web-runtime row (`@deepseek-ai/dsh-web-app`) no longer owns `trustedHosts`, and the `webRuntime` service is gone. The connection row (`@deepseek-ai/dsh-client-connection`) owns the Host/Origin fence and its active `trustedHosts` list. This bridge therefore injects `[connection, webServer]` and cross-checks `authorities` against the live connection list. A deployment overlay written for an older alpha that still puts `trustedHosts` on the web-runtime row must move that key to the `connection` row; current web-runtime schemas reject the old key.
 
 **DSH 0.2.2-rc.1 migration.** The 0.2.1-rc contract is unchanged: the connection-owned Host/Origin fence, `authenticatedUrl()`, `ctx.webServer.host/port`, and the token-exchange/401 semantics all still match. The peer pins move together to DSH `0.2.2-rc.1`, Cordis `4.1.0`, and Schemastery `3.19.0`. Cordis 4.1.0 fixes the `ctx.plugin()` wrapper-`restart()` defect that T-DSH4b used to pin, so that test now asserts the fixed ordering (consumers see the service only after its async `Service.init` settles).
+
+### 0.1.0-rc.1 Specifications and Migration
+
+Version `0.1.0-rc.1` is the Release Candidate baseline for production deployment, solidifying:
+1. **Multi-channel release pipeline & guards:** Formal release gate generalizing across `alpha` and `rc` distribution channels with strict channel-matching tags and provenance.
+2. **Reverse proxy grammar validation:** Optional binary syntax verification (`nginx -t`, `caddy validate`) for deployment examples, preventing configuration drift.
+3. **Architecture & Header boundaries:** Request-direction `Authorization` stripping to isolate proxy credentials from DSH, RFC 9110 `Via: 1.1 dsh-web-bridge` upstream tracing, strict RFC 9112 duplicate Host rejection, and seamless IPv4/IPv6 loopback upstream forwarding.
+4. **Filesystem DAC & Socket security:** Strict `0600`/`0700` and group `0660`/`02710`/`02750` Unix domain socket leasing with euid validation, `flock` mutual exclusion, and parent directory traversal verification.
 
 ### 0.1.0-alpha.7 Migration (from 0.1.0-alpha.6)
 
