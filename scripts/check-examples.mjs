@@ -1,11 +1,14 @@
 import { createRequire } from 'node:module';
-import { lstatSync, readFileSync } from 'node:fs';
+import { execFileSync, spawnSync } from 'node:child_process';
+import { lstatSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
-// Static deployment-example gate (no docker, no proxy binaries). It verifies
-// that every example targets the same socket path and authority as
-// examples/overlay.example.yml and keeps the directives each access layer needs
-// for TLS, external authentication, SSE and WebSocket. It deliberately does not
-// parse nginx/Caddy grammars; `nginx -t` / `caddy validate` stay deployment-side.
+// Deployment-example gate. It verifies that every example targets the same
+// socket path and authority as examples/overlay.example.yml and keeps the
+// directives each access layer needs for TLS, external authentication, SSE
+// and WebSocket. Additionally performs optional binary syntax validation
+// (nginx -t / caddy validate) when the respective binaries exist on PATH.
 
 class ExamplesGateError extends Error {
   code = 'ERR_EXAMPLES';
@@ -141,6 +144,61 @@ function checkNoKeyMaterial() {
   }
 }
 
+function checkOptionalNginxSyntax() {
+  const probe = spawnSync('which', ['nginx'], { encoding: 'utf8' });
+  if (probe.status !== 0) {
+    console.log('SKIP: nginx syntax validation (nginx binary not found on PATH)');
+    return;
+  }
+  const opensslProbe = spawnSync('which', ['openssl'], { encoding: 'utf8' });
+  const dir = mkdtempSync(join(tmpdir(), 'nginx-check-'));
+  try {
+    const certPath = join(dir, 'fullchain.pem');
+    const keyPath = join(dir, 'privkey.pem');
+    const htpasswdPath = join(dir, 'dsh.htpasswd');
+    writeFileSync(htpasswdPath, 'user:test\n');
+
+    if (opensslProbe.status === 0) {
+      execFileSync('openssl', [
+        'req', '-x509', '-newkey', 'rsa:2048', '-nodes',
+        '-keyout', keyPath, '-out', certPath, '-days', '1',
+        '-subj', '/CN=dsh.example.com',
+      ], { stdio: 'pipe' });
+    } else {
+      writeFileSync(certPath, 'dummy cert\n');
+      writeFileSync(keyPath, 'dummy key\n');
+    }
+
+    let conf = read('examples/nginx.conf');
+    conf = conf.replaceAll('/etc/ssl/dsh/fullchain.pem', certPath);
+    conf = conf.replaceAll('/etc/ssl/dsh/privkey.pem', keyPath);
+    conf = conf.replaceAll('/etc/nginx/dsh.htpasswd', htpasswdPath);
+
+    const fragmentPath = join(dir, 'dsh.conf');
+    writeFileSync(fragmentPath, conf);
+
+    const rootConfPath = join(dir, 'nginx.conf');
+    writeFileSync(rootConfPath, `events { worker_connections 1024; }\nhttp {\n    include ${fragmentPath};\n}\n`);
+
+    const result = spawnSync('nginx', ['-t', '-c', rootConfPath], { encoding: 'utf8' });
+    requireCondition(result.status === 0, `nginx syntax validation failed: ${result.stderr || result.stdout}`);
+    console.log('PASS: nginx syntax validation (nginx -t)');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+function checkOptionalCaddySyntax() {
+  const probe = spawnSync('which', ['caddy'], { encoding: 'utf8' });
+  if (probe.status !== 0) {
+    console.log('SKIP: caddy syntax validation (caddy binary not found on PATH)');
+    return;
+  }
+  const result = spawnSync('caddy', ['validate', '--config', 'examples/Caddyfile', '--adapter', 'caddyfile'], { encoding: 'utf8' });
+  requireCondition(result.status === 0, `caddy syntax validation failed: ${result.stderr || result.stdout}`);
+  console.log('PASS: caddy syntax validation (caddy validate)');
+}
+
 try {
   const { socketPath, authority } = checkOverlay();
   checkNginx(socketPath, authority);
@@ -149,6 +207,8 @@ try {
   checkLocalClient(socketPath, authority);
   checkReadmeAndManifest();
   checkNoKeyMaterial();
+  checkOptionalNginxSyntax();
+  checkOptionalCaddySyntax();
   console.log(`PASS: deployment examples (socket ${socketPath}, authority ${authority})`);
 } catch (error) {
   if (!(error instanceof Error)) throw error;
