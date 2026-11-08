@@ -1,6 +1,6 @@
 {
   "name": "@zapsaang/dsh-web-bridge",
-  "version": "0.1.0-alpha.7",
+  "version": "0.1.0-rc.1",
   "description": "Unix domain socket reverse proxy and automatic native session bootstrap for DeepSeek Harness Web, packaged as a Cordis plugin.",
   "license": "MIT",
   "repository": {
@@ -22,7 +22,7 @@
   ],
   "publishConfig": {
     "access": "public",
-    "tag": "alpha",
+    "tag": "rc",
     "registry": "https://registry.npmjs.org/"
   },
   "type": "module",
