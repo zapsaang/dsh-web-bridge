@@ -1,7 +1,7 @@
 {
   "name": "@zapsaang/dsh-web-bridge",
   "version": "0.1.0-alpha.6",
-  "description": "Unix-socket session bridge for DeepSeek Harness behind Cloudflare Access, packaged as a Cordis plugin.",
+  "description": "Unix domain socket reverse proxy and automatic native session bootstrap for DeepSeek Harness Web, packaged as a Cordis plugin.",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -15,8 +15,10 @@
     "deepseek",
     "dsh",
     "cordis",
-    "cloudflare-access",
-    "unix-socket"
+    "unix-socket",
+    "reverse-proxy",
+    "session-bootstrap",
+    "http-proxy"
   ],
   "publishConfig": {
     "access": "public",

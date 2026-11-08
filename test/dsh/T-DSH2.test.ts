@@ -55,6 +55,72 @@ test('T-DSH2 bootstraps through a real DSH instance: HTML, secured cookie, marke
   }
 });
 
+// PR-3: proxy credentials are stripped before DSH, and their presence must not
+// change the native bootstrap chain (the access layer may still send them).
+test('T-DSH2b bootstraps through a real DSH even when the access layer sends Authorization', async () => {
+  // Given a real DSH behind the bridge
+  await using app = await isolated();
+  const runtime: BridgeRuntime = {
+    endpoint: { port: app.port, authenticatedUrl: (base) => app.ctx.connection.authenticatedUrl(base) },
+    authorities: [authority],
+    signal: new AbortController().signal,
+  };
+  const bridge = await startBridge(runtime);
+  try {
+    // When a navigation carries a proxy credential
+    const headers = { ...NAV, authorization: 'Basic cHJveHk6Y3JlZA==' };
+    const bootstrap = await callBridge(bridge.port, { headers });
+    // Then the native exchange still issues the secured cookie
+    assert.equal(bootstrap.status, 200);
+    assert.equal(bootstrap.body.toString('utf8'), BOOTSTRAP_HTML);
+    const pair = (headerValues(bootstrap.rawHeaders, 'set-cookie')[0] ?? '').split(';', 1)[0] ?? '';
+    // And the clean revisit with that cookie serves the native index
+    const clean = await callBridge(bridge.port, { headers: { host: authority, cookie: pair } });
+    assert.equal(clean.status, 200);
+    assert.notEqual(clean.body.toString('utf8'), BOOTSTRAP_HTML);
+  } finally {
+    await bridge.close();
+  }
+});
+
+// PR-2 acceptance: the full native chain must work for every authority form the
+// bridge now admits, not only the bare DNS name — the exchange forwards the raw
+// Host, so DSH must bind the issued cookie to that same authority.
+for (const scenario of [
+  { name: 'an explicit-port authority', authority: `${authority}:8443`, trusted: [`${authority}:8443`] },
+  { name: 'a port authority covered by a bare trusted name', authority: `${authority}:9443`, trusted: [authority] },
+  { name: 'a loopback authority without any trustedHosts entry', authority: 'localhost:8080', trusted: [] },
+] as const) {
+  test(`T-DSH2c bootstraps clean 200 through the bridge for ${scenario.name}`, async () => {
+    // Given a real DSH behind the bridge and the matching authority form
+    await using app = await isolated(scenario.trusted);
+    const runtime: BridgeRuntime = {
+      endpoint: { port: app.port, authenticatedUrl: (base) => app.ctx.connection.authenticatedUrl(base) },
+      authorities: [scenario.authority],
+      signal: new AbortController().signal,
+    };
+    const bridge = await startBridge(runtime);
+    try {
+      // When the qualified navigation arrives without a cookie
+      const bootstrap = await callBridge(bridge.port, {
+        headers: { host: scenario.authority, 'sec-fetch-mode': 'navigate', 'sec-fetch-dest': 'document' },
+      });
+      // Then the native exchange issues the secured cookie
+      assert.equal(bootstrap.status, 200);
+      const issued = headerValues(bootstrap.rawHeaders, 'set-cookie')[0] ?? '';
+      const pair = issued.split(';', 1)[0] ?? '';
+      assert.equal(bootstrap.body.toString('utf8'), BOOTSTRAP_HTML);
+      // When the cookie is presented on the clean root
+      const clean = await callBridge(bridge.port, { headers: { host: scenario.authority, cookie: pair } });
+      // Then the native index is served for that same authority
+      assert.equal(clean.status, 200);
+      assert.notEqual(clean.body.toString('utf8'), BOOTSTRAP_HTML);
+    } finally {
+      await bridge.close();
+    }
+  });
+}
+
 // §14.3 T-DSH2 failure fixture: even with a genuine process token from the real
 // DSH factory, any contract drift on the exchange response must fail closed.
 for (const [name, exchange] of [

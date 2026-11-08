@@ -1,14 +1,93 @@
 # @zapsaang/dsh-web-bridge
 
-> **Status: experimental alpha.** The pinned peers below are a compatibility proposal, not a support claim, and several deployment verification gates are NOT RUN or PARTIAL — see "Deployment verification gates" before treating any of this as supported.
+> **Unix domain socket reverse proxy and automatic native session bootstrap for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (DSH) Web, packaged as a Cordis plugin.**
 
-Unix-socket session bridge that puts a [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (DSH) Web GUI behind Cloudflare Access. The bridge is a Cordis plugin that runs inside the DSH process, listens only on a Unix domain socket, and performs the loopback token exchange on behalf of browsers that arrive through the tunnel — so launch tokens never leave the local machine and never appear in a remote URL, log, or address bar.
+> **Status: experimental alpha.** The pinned peers below are a compatibility proposal, not a support claim, and several deployment verification gates are NOT RUN or PARTIAL — see [Compatibility](#compatibility) before treating any of this as supported.
 
-The `§` section references below (e.g. §12.1) point into an internal design document that is **not published in this repository**, so they are stable labels for the topics they annotate rather than reachable links. The `examples/` files are repository paths, not part of the npm tarball — browse them on GitHub.
+The bridge runs inside the DSH process, listens only on a Unix domain socket, and forwards to the DSH web server over loopback. Any access layer that can speak HTTP/1.1 over a Unix socket can front it: Nginx, Caddy, Cloudflare Tunnel, HAProxy, a local proxy, or a trusted local client. TLS, remote authentication, and access control stay in that layer. The bridge's own job is narrower: expose the socket safely, enforce an explicit Host allowlist, and complete DSH's native token exchange locally when a browser's page navigation hits `401` — so launch tokens never leave the machine and never appear in a remote URL, log, or address bar.
+
+Identifiers such as `T-U9`, `T-P1d`, `T-P4`, and `V1`–`V7` are stable labels used by the test suite and release notes.
+
+Maintainer-only material — local toolchain, the release gate, verification evidence, and the publishing workflow — lives in [`MAINTAINING.md`](https://github.com/zapsaang/dsh-web-bridge/blob/main/MAINTAINING.md). That file is repository-only and is not shipped in the npm tarball.
+
+## Overview
+
+```text
+              Browser / API Client
+                       │
+                 HTTPS / HTTP
+                       │
+       ┌───────────────┴──────────────┐
+       │      Access layer (swap it)  │
+       │                              │
+       │ Nginx / Caddy / Cloudflared  │
+       │ HAProxy / local proxy / ...  │
+       │                              │
+       │ TLS, external auth, ACLs     │
+       └───────────────┬──────────────┘
+                       │
+                 Unix Domain Socket
+                       │
+       ┌───────────────┴──────────────┐
+       │        DSH Web Bridge        │
+       │                              │
+       │  UDS lifecycle               │
+       │  HTTP / SSE / WS proxy       │
+       │  Session auto-bootstrap      │
+       │  Host / Origin guard         │
+       └───────────────┬──────────────┘
+                       │
+               HTTP Loopback
+                       │
+               DSH Web Server
+                 127.0.0.1
+```
+
+| Client request | Bridge behavior |
+|---|---|
+| `Host` not in `authorities` | `403`, no upstream connection |
+| Malformed `Host`/target, `?token=` in a remote URL, protected `Connection` nomination | `400` |
+| Normal request with a valid `Host` | streamed to DSH; verified `Host`, `Origin`, cookies, and fetch metadata are preserved |
+| `GET /` document navigation → upstream `401` | one loopback token exchange → `200` bootstrap page carrying the `dsh-auth-*` cookie with `Secure` |
+| `GET /?__dsh_bridge_retry=1` → upstream `200` | `303` to `/`, marker stripped |
+| API / SSE / WebSocket → upstream `401` | relayed to the client; no exchange |
+| WebSocket upgrade | handshake validated, then streamed both ways with `101` |
+| Token exchange fails | original `401` relayed unchanged; never an anonymous fallback |
+
+## Features
+
+**Provided**
+
+- **Unix socket listener** with strict filesystem lifecycle: euid-owned parent, `flock` instance exclusion, stale-socket identification, inode and mode verification, and a readiness gate that refuses connections until checks complete.
+- **HTTP/1.1 proxying** to `127.0.0.1`, including streaming request/response bodies, SSE, and WebSocket upgrade (`101` relayed, frames piped both ways).
+- **Authority allowlist** — an explicit enumeration, matched case-insensitively against the request's single `Host` value.
+- **Native session bootstrap** — loopback-only token exchange using DSH's own `authenticatedUrl()` and a fixed-CSP re-navigation page.
+- **Header hygiene** — RFC hop-by-hop fields and `Connection`-nominated fields are removed both ways; proxy identity credentials (`Cf-Access-Jwt-Assertion` both ways, `Authorization` on the request direction) are stripped; protected `Connection` nominations are rejected.
+- **Bounded resources** — fixed connect/first-header/upload/exchange deadlines, no connection pooling to upstream, and no HTTP trailer support (a request carrying a `Trailer` header is refused with `501`; a response that announces trailers is refused with `502`, and a connection that ends with actual trailers is torn down).
+
+**Not provided, by design**
+
+- TLS termination, certificate automation, or an ACME client.
+- Remote user authentication, OIDC/SSO, user databases, RBAC, or multi-tenancy.
+- Any Cloudflare, Nginx, or Caddy API integration.
+- A custom session format, cookie signing, or token store.
+- A way to run without the DSH web server bound to `127.0.0.1`.
+
+## Architecture
+
+The bridge is one Cordis plugin row inside the DSH profile. It injects `connection` and `webServer`, reads `webServer.host`/`webServer.port`, and derives the exchange URL from `connection.authenticatedUrl()`.
+
+### Trust boundaries
+
+**Boundary 1 — Unix socket access.** Any local process that can connect to the socket is a trusted process. It may trigger an automatic session bootstrap whenever an eligible request arrives. Socket owner, UID/GID, file mode, and local process isolation therefore *are* the local access-control boundary. The plugin adds no per-peer identity check beyond the filesystem.
+
+**Boundary 2 — Remote identity.** For public or untrusted networks, the access layer must establish authentication before forwarding to the socket: Nginx Basic Auth or `auth_request`/OIDC, mTLS, Cloudflare Access, or an authenticated internal gateway. Plain HTTPS only encrypts the transport; an unauthenticated public request that reaches the bridge can obtain a DSH session. This is a deployment responsibility — the bridge does not judge proxy credentials.
+
+**Boundary 3 — DSH native session.** DSH issues and validates the session. The bridge only performs the local token exchange, forwards cookies (appending `Secure` to `dsh-auth-*`), and triggers a browser re-navigation. It never reads the signing secret, synthesizes cookies, or bypasses the DSH Host/Origin fence.
 
 ## Installation
 
-Pinned peers (exact versions, no ranges — §10.2):
+Pinned peers (exact versions, no ranges):
 
 | Peer | Version |
 |---|---|
@@ -18,17 +97,15 @@ Pinned peers (exact versions, no ranges — §10.2):
 
 Runtime: Node `>=24.21.0 <25` plus the util-linux `flock` system tool.
 
-Install into the web profile (the CLI forwards the remaining arguments to pnpm inside the profile directory, §10.3):
+Install into the web profile (the CLI forwards the remaining arguments to pnpm inside the profile directory):
 
 ```sh
 dsh plugin --profile web add @zapsaang/dsh-web-bridge@0.1.0-alpha.6
 ```
 
-**DSH 0.2.1-rc migration.** The web-runtime row (`@deepseek-ai/dsh-web-app`) no longer owns `trustedHosts`, and the `webRuntime` service is gone. The connection row (`@deepseek-ai/dsh-client-connection`) owns the Host/Origin fence and its active `trustedHosts` list. This bridge therefore injects `[connection, webServer]` and cross-checks `authorities` against the live connection list. A deployment overlay written for an older alpha that still puts `trustedHosts` on the web-runtime row must move that key to the `connection` row; current web-runtime schemas reject the old key.
+Prefer an explicit version or `@alpha`, and check `npm view @zapsaang/dsh-web-bridge dist-tags --json` instead of assuming which tag points at the newest release.
 
-**DSH 0.2.2-rc.1 migration.** The 0.2.1-rc contract is unchanged on 0.2.2-rc.1: the connection-owned Host/Origin fence, `authenticatedUrl()`, `ctx.webServer.host/port`, and the token-exchange/401 semantics all still match. The peer pins move together to DSH `0.2.2-rc.1`, Cordis `4.1.0`, and Schemastery `3.19.0` (the versions that release depends on). Cordis 4.1.0 fixes the `ctx.plugin()` wrapper-`restart()` defect that T-DSH4b used to pin, so that test now asserts the fixed ordering (consumers see the service only after its async `Service.init` settles).
-
-**Activation mechanism.** The package's `package.json` carries `dsh.bundle.patch: ["./cordis.patch.yml"]`; the profile loader (`bundlePatchPaths`) reads that metadata and applies the shipped patch as one bundle layer. The patch is a single append-mode `insert` row:
+**Activation mechanism.** `package.json` carries `dsh.bundle.patch: ["./cordis.patch.yml"]`; the profile loader reads that metadata and applies the shipped patch as one bundle layer. The patch is a single append-mode `insert` row:
 
 ```yaml
 - insert:
@@ -37,12 +114,30 @@ dsh plugin --profile web add @zapsaang/dsh-web-bridge@0.1.0-alpha.6
       inject: [connection, webServer]
       config:
         socketPath: /run/dsh-web/session-bridge.sock
-        authorities: [dsh.example.com, dsh2.example.com]
 ```
 
-The shipped bundle intentionally keeps exactly two config keys (`socketPath`, `authorities`). Omitting `socketAccess` selects the default **strict** socket mode; the raw bundle does not carry the key.
+The shipped bundle carries **only** `socketPath`. It deliberately ships no example authorities: the row loads, then the plugin fails with an actionable error until a deployment overlay supplies at least one authority, so a placeholder domain can never silently become a real deployment. Copy [`examples/overlay.example.yml`](https://github.com/zapsaang/dsh-web-bridge/blob/main/examples/overlay.example.yml) and replace the example host. Omitting `socketAccess` selects the default **strict** socket mode.
 
-**Group mode (opt-in, local overlay only).** Shared-group socket access is **implemented and published since `0.1.0-alpha.3`**, with the privileged Linux cross-UID acceptance gate (A7-A9) **PASS on CI** (`groupPositive=4 strictNegative=2`); deployment verification (A10) is still **NOT RUN**. See "tmpfiles and directory permissions" below. To provision for it, the deployment adds its own overlay row that restates the bridge config with the explicit third key:
+> **Upgrading from `0.1.0-alpha.6`:** that version ships `authorities: [dsh.example.com, dsh2.example.com]` in the bundle and accepts only bare DNS names. Add an overlay (the example above) when you upgrade; existing bare DNS authorities keep working unchanged.
+
+Installing the package is not the same as enabling it: CLI bundle selection comes from the plugin-manager reconcile — a newly added bundle with `dsh.bundle` metadata is selected by default, an already-installed-but-disabled dependency is **not** re-enabled, and a package without `dsh.bundle` metadata stays a plain dependency. A live process is not readiness either; see [Security Model](#security-model).
+
+### Deployment overlays
+
+Cordis patch semantics: **a row's config is replaced wholesale, not deep-merged**. Every overlay below must restate every key it needs. A complete, copyable overlay — bridge row plus the DSH-side rows — lives in [`examples/overlay.example.yml`](https://github.com/zapsaang/dsh-web-bridge/blob/main/examples/overlay.example.yml).
+
+**Bridge row** (required: your own authorities):
+
+```yaml
+- id: dsh-web-bridge
+  name: '@zapsaang/dsh-web-bridge'
+  inject: [connection, webServer]
+  config:
+    socketPath: /run/dsh-web/session-bridge.sock
+    authorities: [dsh.example.com]
+```
+
+**Bridge row, group mode** (opt-in; adds the third key):
 
 ```yaml
 - id: dsh-web-bridge
@@ -51,14 +146,12 @@ The shipped bundle intentionally keeps exactly two config keys (`socketPath`, `a
   config:
     socketPath: /run/dsh-web/session-bridge.sock
     socketAccess: group
-    authorities: [dsh.example.com, dsh2.example.com]
+    authorities: [dsh.example.com]
 ```
 
-The overlay only takes effect together with the matching group-mode tmpfiles line; enabling one without the other fails closed at startup.
+The group overlay only takes effect together with the matching group-mode tmpfiles line; enabling one without the other fails closed at startup.
 
-Installing the package is not the same as enabling it: CLI bundle selection comes from the plugin-manager reconcile — a newly added bundle with `dsh.bundle` metadata is selected by default, an already-installed-but-disabled dependency is **not** re-enabled, and a package without `dsh.bundle` metadata stays a plain dependency (§10.3). A live process is not readiness; see "Readiness" below.
-
-**DSH-side overlay.** The deployment must also restate the webserver / web-runtime / connection rows so the DSH web server stays on loopback and never prints a tokenized URL (§12.1 — a patch replaces a row's whole config, so every owned key is restated):
+**DSH-side rows.** Restate the webserver / web-runtime / connection rows so the DSH web server stays on loopback and never prints a tokenized URL:
 
 ```yaml
 - id: webserver
@@ -82,51 +175,92 @@ Installing the package is not the same as enabling it: CLI bundle selection come
   name: '@deepseek-ai/dsh-client-connection'
   inject: [webStartup]
   config:
-    trustedHosts: !!js "['dsh.example.com', 'dsh2.example.com', ...ctx.webStartup.trustedHosts]"
+    trustedHosts: !!js "['dsh.example.com', ...ctx.webStartup.trustedHosts]"
 ```
 
 The `connection` row replaces its whole config too: the example shows the only key this deployment overrides. A deployment that also sets `recovery`, `cookieMaxAgeDays`, or `maxRequestBodyBytes` must restate those keys here, or they fall back to the schema defaults.
 
-## Cloudflare Access configuration
+## Configuration
 
-Topology (full example in [`examples/cloudflared.yml`](https://github.com/zapsaang/dsh-web-bridge/blob/main/examples/cloudflared.yml), §12.2): cloudflared terminates TLS and Access, then connects to the bridge over the Unix socket. Each public hostname gets its own ingress rule with its own Access application audience tag:
+The plugin accepts exactly three keys; unknown keys are rejected at load time.
 
-```yaml
-ingress:
-  - hostname: dsh.example.com
-    service: unix:/run/dsh-web/session-bridge.sock
-    originRequest:
-      access:
-        required: true
-        teamName: <team>
-        audTag: [<aud-dsh-example-com>]
-  - hostname: dsh2.example.com
-    service: unix:/run/dsh-web/session-bridge.sock
-    originRequest:
-      access:
-        required: true
-        teamName: <team>
-        audTag: [<aud-dsh2-example-com>]
-  - service: http_status:404
-```
+| Key | Type | Default | Meaning |
+|---|---|---|---|
+| `socketPath` | string | `/run/dsh-web/session-bridge.sock` | Absolute UDS path (≤107 UTF-8 bytes, no `..`, no NUL). |
+| `socketAccess` | `strict` \| `group` | `strict` | Socket mode: `0600` / `0660`, with matching parent-directory rules. |
+| `authorities` | string[] | *required* | Allowed HTTP authorities. Omission or an empty list fails schema validation, so no socket is created. |
 
-- Every rule sets `access.required: true`; bypassing Access is the main residual remote threat (§11).
-- **Do not set `httpHostHeader`.** cloudflared's Unix-origin code path does not read it (§3.1), and the deployment depends on the original public `Host` value reaching DSH unchanged — the DSH trust fence and the bridge authority list both match on it. Gate V1 exists to prove this preservation and stops the deployment if it fails.
-- One Access application (one `audTag`) per hostname; tags are not shared across rules.
+`authorities` is a full admission list, not just a bootstrap switch: a request whose `Host` is not in it is rejected with `403` before any upstream connection.
 
-## trustedHosts vs. authorities
+### Authority syntax
 
-Three deliberately different lists (§12.1) — do not mirror them:
+`authorities` entries follow the same rule DSH applies to `connection.trustedHosts`: a bare `host[:port]` authority that survives WHATWG URL parsing unchanged, case aside. The bridge adds no rule of its own, so the list cannot be stricter than the fence the request must later pass.
 
-1. **bridge `authorities`** — only the public names the bridge may bootstrap (here: the two public hostnames). Canonical bare DNS names: lowercase, no port, no wildcard, no IP literal (schema-enforced).
+| Entry | Matches |
+|---|---|
+| `dsh.example.com` | that hostname on any port |
+| `dsh.example.com:8443` | that exact authority (HTTP's default port `80` folds into the bare form) |
+| `localhost`, `localhost:8080` | loopback; no `connection.trustedHosts` entry needed |
+| `192.168.1.10`, `192.168.1.10:8443` | IPv4, any or that port |
+| `[::1]`, `[::1]:8443` | bracketed IPv6, any or that port |
+
+Matching mirrors DSH exactly: a bare entry covers any port, `host:port` compares parsed `URL.host` values, and there is no wildcard or subdomain expansion — a `*` in an entry is just a literal character. The wire `Host` is parsed with the same WHATWG rules, so case, IDN punycode, and an explicit default port behave exactly as they do in DSH.
+
+Entries DSH would refuse are refused here too: userinfo, path/query, whitespace or control characters, percent-encoding, IDN spellings that need punycoding, shorthand/hex IPv4, unbracketed or non-canonical IPv6, and dangling, zero-padded, or out-of-range ports. Uppercase, a trailing dot, underscores, `:0`, and wildcard characters survive parsing, so they are accepted as written and normalized to DSH's canonical form.
+
+A missing or empty list fails with `authorities is required; add a bridge overlay with authorities: ['<public-host>']`. Beyond that entry rule there is no bridge-specific restriction on the list.
+
+**Version note.** The syntax above ships in `0.1.0-alpha.7`. `0.1.0-alpha.6` accepts only lowercase, port-less DNS names, ships two example domains in the bundle, and requires every authority as a bare `connection.trustedHosts` entry.
+
+### `trustedHosts` vs. `authorities`
+
+Three deliberately different lists — do not mirror them:
+
+1. **bridge `authorities`** — the authorities the bridge may serve and bootstrap. This deployment's explicit admission list.
 2. **webStartup `trustedHosts`** — only the `--trusted-host` values named on this invocation. It is an input to the connection row, not a deployment list.
 3. **connection `trustedHosts`** — the active Host/Origin fence list: the public names plus any CLI extras. On DSH `0.2.2-rc.1` this is the authoritative list; the web-runtime row no longer carries one.
 
-At startup the bridge cross-checks that every configured authority is a bare (port-less) entry of the **active** `connection.trustedHosts` (§12.1). A missing entry, a port-bearing entry, or a connection without a trusted-host list fails closed with `ERR_BRIDGE_AUTHORITY_TRUST` before any socket is created. CLI extras remain valid for the native fence but never become bridge-approved authorities.
+At startup the bridge cross-checks every authority the way DSH's `/api` Host fence will judge the forwarded `Host`:
 
-## tmpfiles and directory permissions
+| Authority | `connection.trustedHosts` | Result |
+|---|---|---|
+| `dsh.example.com` | `['dsh.example.com']` | pass — a bare name covers any port |
+| `dsh.example.com` | `['dsh.example.com:8443']` | **fail** — a port-specific entry cannot cover a port-less authority |
+| `dsh.example.com:8443` | `['dsh.example.com:8443']` | pass — exact port |
+| `dsh.example.com:8443` | `['dsh.example.com']` | pass — a bare name covers any port |
+| `localhost:8080` | `[]` | pass — DSH accepts loopback directly |
+| `[::1]:8443` | `[]` | pass — loopback |
+| `192.168.1.10:8443` | `['192.168.1.10:8443']` | pass — non-loopback must be listed |
+| `192.168.1.10:8443` | `[]` | **fail** — non-loopback and not listed |
 
-[`examples/dsh-web.tmpfiles.conf`](https://github.com/zapsaang/dsh-web-bridge/blob/main/examples/dsh-web.tmpfiles.conf) (§12.3) carries one **active** directive and two commented, mutually exclusive alternatives for the same path:
+A missing or mismatched entry, or a `connection` without a trusted-host list, fails closed with `ERR_BRIDGE_AUTHORITY_TRUST` before any socket is created. CLI extras remain valid for the native fence but never become bridge-approved authorities.
+
+**Security premise for loopback authorities.** DSH accepts `Host: localhost`, `127.0.0.1`, `[::1]`, and its own bind address unconditionally. If one bridge is both reachable through a public proxy and configured with a loopback authority, and that proxy forwards the client's `Host` unchanged, an external request with `Host: localhost` can pass both fences and obtain a loopback-audience session cookie. Configure loopback authorities only when the socket is not fronted by an untrusted proxy; a public proxy must rewrite `Host` or reject names outside the allowlist.
+
+### Startup checks and fixed limits
+
+In order, before the socket is created:
+
+1. `webServer.host === '127.0.0.1'` with an integer port in `1..65535`, otherwise `ERR_BRIDGE_LOOPBACK_GUARD`. A DSH bound to `::1` or a LAN address cannot be bridged today.
+2. every authority is trusted under those same fence semantics (loopback and the bind address excepted), otherwise `ERR_BRIDGE_AUTHORITY_TRUST`.
+3. the socket lease: path constraints → parent directory trust → lock identity → `flock` → stale reclaim → bind → chmod → inode/mode re-verification. See [Security Model](#security-model).
+
+Fixed, non-configurable budgets (overridable only by the internal runtime type, never by plugin config):
+
+| Budget | Value | On expiry |
+|---|---|---|
+| upstream connect | 2 s | `502` |
+| upload (request body) | 300 s | `408` |
+| first response header | 30 s | `504` |
+| token exchange (total) | 2 s | exchange failure → original `401` |
+
+`Expect: 100-continue` is supported; any other `Expect` value gets `417`. HTTP trailers are not supported: see [Features](#features).
+
+## Security Model
+
+### Socket permissions and lifecycle
+
+[`examples/dsh-web.tmpfiles.conf`](https://github.com/zapsaang/dsh-web-bridge/blob/main/examples/dsh-web.tmpfiles.conf) carries one **active** directive and two commented, mutually exclusive alternatives for the same path:
 
 ```ini
 # /etc/tmpfiles.d/dsh-web.conf
@@ -136,34 +270,231 @@ d /run/dsh-web 0700 dsh dsh -
 # d /run/dsh-web 02750 dsh dsh-bridge -   # discovery: group may also list
 ```
 
-**Strict mode (default).** Directory `0700` owned by the `dsh` user; the socket itself is `0600` and the lock file is `0600`. cloudflared runs as a root system service and can connect to the `dsh`-owned socket; no other-UID sharing is active. Strict deployments may keep `0700`-owned ancestors anywhere on the path.
+**Strict mode (default).** Directory `0700` owned by the `dsh` user; the socket itself is `0600` and the lock file is `0600`. A root-run connector (cloudflared, a system Nginx worker) can connect to the `dsh`-owned socket; no other-UID sharing is active. Strict deployments may keep `0700`-owned ancestors anywhere on the path.
 
-**Group mode (opt-in, implemented locally; unpublished).** The operator pre-creates the directory as setgid `02710` (preferred: group members traverse but cannot list) or `02750` (discovery: group members may list), owner `dsh`, group a dedicated bridge group such as `dsh-bridge`. No group write, no permissions for others. The socket is created `0660` and inherits the directory GID through setgid; the lock stays `0600`, so group members can connect but cannot create, delete, or rename anything in the directory. Enabling group mode is two coordinated steps from one configuration owner: the `socketAccess: group` overlay row and the matching tmpfiles line (owner, group, path, mode). The plugin never creates, chowns, or chmods the directory itself, and never falls back if the predicates do not match. Mode `02750` is setgid, not sticky.
+**Group mode (opt-in, implemented and published since `0.1.0-alpha.3`).** The operator pre-creates the directory as setgid `02710` (preferred: group members traverse but cannot list) or `02750` (discovery: group members may list), owner `dsh`, group a dedicated bridge group such as `dsh-bridge`. No group write, no permissions for others. The socket is created `0660` and inherits the directory GID through setgid; the lock stays `0600`, so group members can connect but cannot create, delete, or rename anything in the directory. Enabling group mode is two coordinated steps from one configuration owner: the `socketAccess: group` overlay row and the matching tmpfiles line (owner, group, path, mode). The plugin never creates, chowns, or chmods the directory itself, and never falls back if the predicates do not match. Mode `02750` is setgid, not sticky.
 
+- **Lease rules.** The path must be absolute, `..`-free, NUL-free and at most 107 UTF-8 bytes. The parent must be an euid-owned real directory — strict: no group/other permission bits at all (`mode & 0o077 === 0`); group: exactly `02710` or `02750`. Every ancestor must be a real directory owned by root or the effective UID with no group/other write. The adjacent `<socket>.lock` must be the same euid-owned regular inode with mode `0600`, seen both through its descriptor and through its path, and must be held with `flock` (exit `75` means another instance owns it).
+- **Stale-socket reclaim.** An existing path is only reclaimed when it is an euid-owned socket, a connect probe fails with `ECONNREFUSED` (proving no live listener), and a re-`lstat` shows the same device/inode; then it is unlinked. Anything else fails closed.
+- **Bind verification.** After bind the socket is chmodded to the target mode and re-inspected: it must still be a socket, same device/inode, same euid, exact mode, and (in group mode) the parent directory's GID. Any drift aborts startup and disposes the lease.
 - **Trust semantics.** Group membership equals full DSH Web access. Any process whose primary or supplementary groups hit the shared group can reach the socket, trigger bootstrap, and read real DSH `Set-Cookie` values; no Cloudflare or cloudflared needs to be present. `Host`, `Accept`, `Sec-Fetch-*`, `Cf-Access-Jwt-Assertion`, and `Authorization` headers are not local identity and grant no standing; the bridge adds no such check. Choose the directory group as the authorization decision and use a dedicated group per bridge so revocation and auditing stay cheap.
 - **Ancestors.** In group mode every ancestor on the socket path must be traversable by the connecting service accounts (for example an unprivileged cloudflared) with no group/other write. Private home directories and `/run/user/UID` roots block group peers and must not host the socket.
 - **Lock and age discipline.** The `-` age field disables age-based cleanup. tmpfiles or systemd must never remove, replace, truncate, or age-clean the lock inode or its parent directory while any cooperating instance may be alive. If a unit uses `RuntimeDirectory`, set `RuntimeDirectoryPreserve=yes`; a failed competing unit stopping must not delete the active owner's inode. There must be no competing owner or chmod manager for the same path. Operator cleanup is allowed only after confirming all instances have stopped.
 - **Mode switch.** Changing strict to group or back is never an online operation. Stop all cooperating instances (every bridge instance and every connector), change the config overlay and the tmpfiles owner/group/mode together, refresh the connecting services' credentials (primary group and supplementary groups), then do a full start. Cordis pending restart, update, and reload do not perform this switch.
 - **Shutdown quarantine.** A shutdown that hits its deadline or a close error enters quarantine: the lease is held, no retry or reset is attempted, and replacement is blocked until the entire process stops (the OS then reaps the fds). Plan a full process stop, not a plugin swap, after any quarantined shutdown error.
-- **Readiness.** Ready means the lease checks completed: verified directory, lock acquired, bind, chmod, re-check. Listening or a live pid is not readiness, and connections made before ready are not served.
+- **Readiness.** Ready means the lease checks completed: verified directory, lock acquired, bind, chmod, re-check. Listening or a live pid is not readiness, and connections made before ready are not served (they are destroyed).
 - **Revocation limits.** Removing a member from the group, or any DAC change, does not close existing open connections and does not revoke already issued DSH cookies. Treat connection draining and cookie revocation as separate operational steps.
 - **ACL stance (deployment gate).** Every layer of the path, the socket, and the lock must carry only the base `user::` / `group::` / `other::` ACL entries, which are equivalent to the mode. Named entries, mask-only entries, and default ACLs at any layer are unsupported. mode/gid alone cannot exclude mask or named entries, so inspect every layer plus the socket plus the lock, read-only, with `getfacl -p <path>` (`-p` retains the leading slash on absolute paths, not relative paths; `setfacl -m` modifies ACLs and is not an inspection command) together with `stat`. The plugin does not detect ACLs; this is operator-side only, checked before enabling group mode.
-- **Functional evidence (same UID only).** Fresh compiled configuration/group checks passed **24/24**, and readiness checks passed **27/27**. Independent real-server probes observed zero HTTP response bytes on all four pre-ready events at both chmod and final-stat barriers; after validation, navigation/API returned **200** and WebSocket upgrade returned **101**, with accepted-connection closure and the original successful native close callback observed on disposal. The public built `apply` with real pinned DSH passed native cookie bootstrap and protected `/api/native-probe` checks, **401 without a cookie / 200 with the issued cookie**, for omitted and explicit strict and both group directory modes (`02710`, `02750`). These same-UID results are **not cross-UID acceptance** or production ACL/credential evidence. The pinned DSH and browser regression suites passed **60/60** and **7/7**, respectively.
-- **Gate status (honest).** The formal Linux group gate is `scripts/check-socket-access-linux.mjs` (run with plain node, no test framework) together with `test/http/socket-access-linux.test.ts`; on CI it runs under an explicit `sudo` by the orchestrator and never edits groups or accounts automatically. The gate **passes on CI** (publish workflow, ubuntu-24.04, `groupPositive=4 strictNegative=2`). The local formal command on the maintainer machine still returns **exit 2** (`getfacl` unavailable and UID 1000 cannot drop to a foreign UID — `setpriv` reports operation not permitted), which remains a developer-privilege skip, not a product verdict; run the formal entry on a privileged Linux runner for a local verdict. Deployment-side stat/ACL and connector credential-refresh verification (A10) and any production deployment remain **NOT RUN**.
+- **Evidence status.** Same-UID checks passed (configuration/group **24/24**, readiness **27/27**, and native pinned-DSH bootstrap **401 without a cookie / 200 with the issued cookie** for strict and both group directory modes), and the formal Linux group gate passes on CI (`groupPositive=4`, `strictNegative=2`). Cross-UID acceptance and deployment ACL/credential verification (A10) remain **NOT RUN**; full evidence and the gate tooling are in [`MAINTAINING.md`](https://github.com/zapsaang/dsh-web-bridge/blob/main/MAINTAINING.md#verification-evidence).
 
-## Threat model (operational summary, §11)
+### Request admission
 
-Who owns which boundary:
+Every HTTP request, `checkContinue` request, and WebSocket upgrade passes the same admission step before any upstream connection:
 
-- **Cloudflare Access / cloudflared** owns JWT verification at the edge and in the connector. The bridge **never** verifies Access JWTs and never sees them: `Cf-Access-Jwt-Assertion` and `Authorization` are stripped/never logged, and a nominated `Connection` header cannot smuggle them (I6).
-- **DSH** owns session-cookie signing and verification, the Host/Origin/Fetch-Metadata trust fence, and the token exchange endpoint. The bridge performs only structural cookie checks and appends `Secure` to DSH-issued cookies (I4, I13); it preserves raw `Host`, `Origin`, and fetch-metadata headers untouched (I5, I6).
-- **The bridge** owns: the Unix-socket listener (I8, I9), the authority list above, the loopback-only token exchange (launch tokens never leave the machine — I1/I2/I3), bootstrap HTML with a pinned-hash CSP, and hop-by-hop header filtering.
+- a first `Host` header that WHATWG URL parsing accepts (Node keeps the first duplicate and DSH parses that same value), and an origin-form target (`/…`, not `//…`, no `#`, `\`, control characters, or spaces) — otherwise `400`;
+- no `token` query parameter — otherwise `400` (a remote request can never use a launch token);
+- no `Connection` nomination of `host`, `origin`, `cookie`, `authorization`, `sec-fetch-*`, or `sec-websocket-*` — otherwise `400`;
+- `Host` must equal an `authorities` entry (case-insensitive) — otherwise `403`.
 
-Accepted local trust domains: a same-UID process and root are inside the trusted computing base (cooperative lease discipline only). The implemented opt-in group mode extends that trust domain to every member of the shared bridge group, with no per-user or per-session isolation inside the group. The main remote residual risks are Access/tunnel misconfiguration and compromised Access accounts (mitigated by MFA/policy); revocation of already-upgraded WebSockets is not instant, see the §13.3 runbook.
+Then: a request `Trailer` header → `501`; a WebSocket upgrade that is not `websocket` → `501`; a malformed upgrade handshake (method, `Connection: Upgrade`, version `13`, a valid 16-byte base64 key, no body) → `400`.
 
-## Deployment verification gates
+Verified `Host`, `Origin`, and fetch-metadata values are forwarded **unchanged**. The bridge never reads or rewrites `X-Forwarded-Host`, `X-Forwarded-Proto`, or `Forwarded`, and those headers never extend the trust lists.
 
-Status of the §13 gates. "PASS (test layer)" means the behavior is pinned by an automated test layer in this repository; it is not production evidence. NOT RUN gates list their missing prerequisites honestly — none may be claimed from synthetic substitutes.
+### Header handling
+
+- **Hop-by-hop (RFC):** `connection`, `keep-alive`, `proxy-authenticate`, `proxy-authorization`, `te`, `trailer`, `transfer-encoding`, `upgrade` — removed in both directions, together with any field named by `Connection`.
+- **Proxy identity token:** `cf-access-jwt-assertion` is stripped in both directions as defensive sanitation. The bridge never verifies an Access JWT and never treats that header as proof of identity.
+- **`Authorization`:** stripped on the request direction as of `0.1.0-alpha.8`; the response direction is deliberately untouched. It is never an input to the bootstrap decision and only needed protection from `Connection` smuggling. The DSH web stack (`dsh-client-connection`, `dsh-host-webserver`, `dsh-web-app`) does not consume the header for authentication today; stripping it keeps proxy Basic/OIDC credentials out of the DSH process. If DSH ever introduces `Authorization`-based auth, land a DSH contract test before relaxing this. Proxies should still terminate and clear it explicitly (Nginx `proxy_set_header Authorization "";`, Caddy `header_up -Authorization`) as defense in depth.
+- **Cookies:** request `Cookie` headers are forwarded untouched and never parsed. On responses, the only change to any `Set-Cookie` value is an idempotently appended `Secure` on `dsh-auth-*` names; the rest of the value is preserved byte-for-byte.
+
+### Session bootstrap security rules
+
+1. Only an eligible root document navigation triggers an exchange (exact predicate in [Authentication Bootstrap](#authentication-bootstrap)).
+2. API, SSE, and WebSocket requests keep DSH's native `401`; the bridge never manufactures a session for them.
+3. Remote `?token=` is rejected outright.
+4. The token exchange is loopback-only: `127.0.0.1:<dsh port>`, `Host` set to the browser's raw `Host` value, no other headers, `agent: false`.
+5. Only a structurally valid native session cookie is accepted (exactly one `Set-Cookie`, `dsh-auth-*`, `HttpOnly` with no value, no incoming `Secure`, `Path=/`, `SameSite=Strict`, positive `Max-Age`, canonical `Expires`, no `Domain`, no control characters).
+6. Re-retry is bounded by the `__dsh_bridge_retry` marker: a marked navigation that still gets `401` is relayed, never re-exchanged.
+7. A failed exchange returns the original unauthenticated response; there is no degraded or anonymous grant.
+8. `HttpOnly`, `SameSite`, and the `Secure` policy are preserved as described above.
+9. Tokens, cookies, and full authenticated requests are never logged (see [Logging policy](#logging-policy)).
+
+### HTTPS policy
+
+There is no explicit protocol check in the code. What actually enforces HTTPS in production is the unconditional `Secure` attribute appended to every `dsh-auth-*` `Set-Cookie`. This has a practical consequence: DSH's own loopback listener is plain HTTP and issues cookies without `Secure`; whether `http://localhost` can still store the rewritten cookie depends on each browser's loopback exception rules and has **not** been verified across browsers. Treat plain-HTTP localhost as a development-only experiment. Do not weaken the `Secure` policy for production.
+
+### Threat model (operational summary)
+
+The bridge strips proxy identity credentials before they can reach DSH (`Cf-Access-Jwt-Assertion` in both directions, `Authorization` on the request direction) and never logs credential material; the access layer's identity is not an input to the bootstrap decision. Accepted local trust domains: a same-UID process and root are inside the trusted computing base (cooperative lease discipline only). The implemented opt-in group mode extends that trust domain to every member of the shared bridge group, with no per-user or per-session isolation inside the group. The main remote residual risks are access-layer misconfiguration (an ingress without Access, a bypass policy, a missing `auth_request`) and compromised remote accounts; revocation of already-upgraded WebSockets is not instant.
+
+### Logging policy
+
+`src/` contains no logging calls at all. The only log-context helper, `redactLogContext`, unconditionally returns `[redacted]`, and `T-U9` pins that function — it does **not** pin "every log path", because there are none.
+
+If logging is ever added, this stays the contract:
+
+- **Allowed:** startup/shutdown, socket path, owner/mode, DSH port, the first authority, bootstrap success/failure (error code only), upstream unavailability, dispose completion.
+- **Forbidden — must never appear in any log:** tokens, tokenized URLs, cookie values, `Cf-Access-Jwt-Assertion`, `Authorization`, complete `Cookie` headers.
+
+## Reverse Proxy Integration
+
+### Unified access contract
+
+Whatever fronts the bridge must satisfy all of these:
+
+- connect to a Unix domain socket;
+- pass the client's `Host` through unchanged (or explicitly rewrite it to an allowed authority);
+- preserve `Origin` and the `Sec-Fetch-*` metadata needed for the bootstrap predicate;
+- support HTTP/1.1 `Upgrade` for WebSocket;
+- support long-lived streaming responses (SSE) with backpressure — disable proxy buffering;
+- never cache; bootstrap responses are `no-store` and must stay uncached;
+- terminate external authentication and **not** forward proxy credentials as `Authorization`.
+
+### Deployment examples
+
+Every example is repository-only (D4): `examples/` is **not** part of the npm tarball. [`scripts/check-examples.mjs`](https://github.com/zapsaang/dsh-web-bridge/blob/main/scripts/check-examples.mjs) statically checks each file against [`examples/overlay.example.yml`](https://github.com/zapsaang/dsh-web-bridge/blob/main/examples/overlay.example.yml) — same socket path and authority, plus the TLS/authentication/SSE/WebSocket directives each layer needs — on every CI run. It does **not** run `nginx -t` or `caddy validate`, so validate the copied file on the deployment host.
+
+| Access layer | Files | TLS | External authentication | Streaming |
+|---|---|---|---|---|
+| Nginx | [`examples/nginx.conf`](https://github.com/zapsaang/dsh-web-bridge/blob/main/examples/nginx.conf) | `listen 443 ssl` | Basic auth, or `auth_request` to an OIDC gateway | `proxy_buffering off` + Upgrade map |
+| Caddy | [`examples/Caddyfile`](https://github.com/zapsaang/dsh-web-bridge/blob/main/examples/Caddyfile) | automatic | `basic_auth`, or `forward_auth` to an OIDC gateway | `flush_interval -1` |
+| Cloudflare Tunnel | [`examples/cloudflared.md`](https://github.com/zapsaang/dsh-web-bridge/blob/main/examples/cloudflared.md), [`examples/cloudflared.yml`](https://github.com/zapsaang/dsh-web-bridge/blob/main/examples/cloudflared.yml) | edge | Access (`required: true`, one `audTag` per hostname) | edge-supported |
+| Local UDS client | [`examples/local-uds-client.md`](https://github.com/zapsaang/dsh-web-bridge/blob/main/examples/local-uds-client.md) | n/a | socket DAC only | `curl` probes; WebSocket via a browser |
+
+Rules that apply regardless of the layer:
+
+- **Preserve `Host`.** Nginx must forward `$http_host` (not `$host`) when an authority carries an explicit port; Caddy forwards the original `Host` by default and must not rewrite it with `{host}`.
+- **Keep `Origin` and `Sec-Fetch-*`.** The bootstrap predicate and DSH's fence both depend on them.
+- **Terminate and clear proxy credentials.** The bridge strips request-direction `Authorization` and both-direction `Cf-Access-Jwt-Assertion`; clearing at the proxy is defense in depth.
+- **Do not buffer or cache.** SSE needs immediate flushing, and bootstrap responses are `no-store`.
+- **Support HTTP/1.1 Upgrade** for WebSocket and validate the handshake end to end.
+
+### Cloudflare Tunnel
+
+Topology, `httpHostHeader` warning, Access prerequisites, overlay rows, and verification steps live in [`examples/cloudflared.md`](https://github.com/zapsaang/dsh-web-bridge/blob/main/examples/cloudflared.md); the ingress file is [`examples/cloudflared.yml`](https://github.com/zapsaang/dsh-web-bridge/blob/main/examples/cloudflared.yml). In short: cloudflared terminates TLS and Access, forwards to `unix:/run/dsh-web/session-bridge.sock`, each hostname gets its own Access application and `audTag`, `access.required` is always `true`, and `originRequest.httpHostHeader` is never set.
+
+### Other UDS clients
+
+Any client that can connect to a Unix socket and speak HTTP/1.1 works; [`examples/local-uds-client.md`](https://github.com/zapsaang/dsh-web-bridge/blob/main/examples/local-uds-client.md) has copyable probes. Minimal check:
+
+```sh
+curl --unix-socket /run/dsh-web/session-bridge.sock \
+  -H 'Host: dsh.example.com' -i http://localhost/
+```
+
+`401` here is expected for a non-navigation client and proves the request reached DSH; `403` means the `Host` is not an authority. Add `-H 'Accept: text/html'` to exercise the bootstrap path (no `Sec-Fetch-*` headers present).
+
+## Authentication Bootstrap
+
+```text
+Client navigation to /
+        │
+        ▼
+    UDS Proxy ──► DSH native session
+        │              │
+        │        ┌─────┴─────┐
+        │      valid      401
+        │        │          │
+        │        ▼          ▼
+        │   page returned  eligible navigation?
+        │                     │
+        │                     ▼
+        │        local token exchange (loopback)
+        │                     │
+        │                     ▼
+        │        DSH issues session + Set-Cookie
+        │                     │
+        │                     ▼
+        │        fixed-CSP 200 page (no-store)
+        │                     │
+        │                     ▼
+        └──────────► browser re-navigates to /?__dsh_bridge_retry=1
+                              │
+                              ▼
+                     DSH 200 → 303 to / (marker stripped)
+```
+
+**Eligibility is deliberately narrow.** An exchange happens only when *all* of the following hold:
+
+- upstream status is exactly `401`;
+- method is `GET`;
+- the path is `/` (a query string is allowed);
+- no `Upgrade` header and no `Transfer-Encoding`;
+- `Content-Length` is absent or exactly `0`;
+- the request does not already carry the `__dsh_bridge_retry` marker;
+- and either the request carries `Sec-Fetch-*` metadata, in which case `Sec-Fetch-Mode: navigate` and `Sec-Fetch-Dest: document` are required (with `Sec-Fetch-Site` and `Sec-Fetch-User` strictly validated when present), or — when no fetch metadata is present at all — `Accept` lists exactly one `text/html` range with `q > 0` and every listed range and parameter parses cleanly.
+
+Everything else — API calls, SSE, WebSocket upgrades, sub-pages, POSTs, uploads — is relayed without any exchange, so an unauthenticated one keeps DSH's native `401`.
+
+**The exchange.** The bridge asks `connection.authenticatedUrl()` for a fresh process-token URL, extracts `token`, and issues one `GET /?token=…` to `127.0.0.1:<dsh port>` with only `Host: <browser's raw Host>` as a header, on a fresh connection, with a 2 s total deadline. It accepts the result only if the response is `303` with `Location: ./`, `Cache-Control: no-store`, `Referrer-Policy: no-referrer`, and exactly one structurally valid `dsh-auth-*` `Set-Cookie`. The response body is never read.
+
+**On success** the browser receives a fixed `200` page: `text/html; charset=utf-8`, `cache-control: no-store`, `referrer-policy: no-referrer`, a CSP pinning the SHA-256 of its single inline script (`default-src 'none'`, `base-uri 'none'`), and the session cookie with `Secure` appended. The inline script calls `location.replace('/?__dsh_bridge_retry=1')`.
+
+**On failure** (factory error, non-`303`, invalid cookie, transport error, timeout, or cancellation) the original upstream `401` is relayed untouched. Nothing is cached and no partial session is stored.
+
+**Retry guard.** A navigation carrying `__dsh_bridge_retry=1` is never exchanged again; if DSH answers it with `200`, the bridge converts that to `303 /` and strips the marker, so a successful bootstrap leaves a clean URL and a failed one cannot loop.
+
+## Troubleshooting
+
+| Symptom / code | Likely cause | Fix |
+|---|---|---|
+| `ERR_BRIDGE_LOOPBACK_GUARD` | DSH web server is not on `127.0.0.1`, or has no valid port | set `webserver.host: '127.0.0.1'`; `::1` is not supported |
+| `ERR_BRIDGE_AUTHORITY_TRUST` | an authority is not covered by `connection.trustedHosts` under DSH semantics, or the list is absent/not a string array | add a covering entry (a bare name covers any port); restart |
+| `ERR_BRIDGE_AUTHORITY_TRUST` while a port-specific trusted entry exists | a `host:port` trusted entry cannot cover a port-less authority | add the bare name too, or make the authority carry the port |
+| `ValidationError: authorities is required; ...` | the overlay omitted `authorities` | add at least one authority, e.g. the public hostname |
+| `authorities entry "..." is not a bare host[:port] authority` | the entry is a spelling WHATWG parsing would rewrite or refuse (userinfo, path, percent-encoding, IDN, shorthand IPv4, non-canonical IPv6, zero-padded or out-of-range port) | write the parsed form exactly, e.g. `host`, `host:port`, or `[v6]:port` |
+| `ERR_BRIDGE_LEASE_PATH` | path not absolute, contains `..`, exceeds 107 UTF-8 bytes, or contains NUL | use a short absolute path |
+| `ERR_BRIDGE_LEASE_DIRECTORY` | parent/ancestor owner or mode mismatch, or a symlinked ancestor | real directory, euid-owned, strict `0700` (no group/other bits); ancestors root/euid-owned, no group/other write |
+| `ERR_BRIDGE_LEASE_LOCK` | lock file is not the same euid-owned `0600` regular inode (a second manager may be replacing it) | stop all instances before touching the lock; keep one owner per path |
+| `ERR_BRIDGE_LEASE_CONFLICT` | another instance holds the `flock` | stop the other instance; never delete a live lock |
+| `ERR_BRIDGE_LEASE_FLOCK` | util-linux `flock` missing or unusable | install util-linux; on macOS add its keg bin to `PATH` |
+| `ERR_BRIDGE_LEASE_STATE` | socket path exists but is not an euid-owned socket, has a live listener, drifted, or bind/chmod failed | inspect the path and the process; do not force-unlink while an instance may be alive |
+| `ERR_BRIDGE_DISPOSE_TIMEOUT` / quarantined shutdown | close deadline hit or a close error occurred | plan a full process stop; replacement is blocked until exit |
+| `403` for a host that looks valid | not covered by `authorities` (a port-specific entry does not cover a port-less `Host`), or the proxy rewrote `Host` | add a covering entry, or fix `Host` preservation |
+| `400` for a `Host` | WHATWG URL parsing refuses the value: whitespace/control characters, an invalid or out-of-range port, unbracketed IPv6 | send a parseable `Host` |
+| External clients can authenticate as `localhost` | a loopback authority is configured behind a public proxy that forwards `Host` unchanged | remove the loopback authority, or force the proxy to rewrite/reject `Host` |
+| Page loads but never authenticates | request is not a document navigation (missing or invalid `Sec-Fetch-*`, or no single `text/html` in `Accept`), or the exchange is failing, or a `Secure` cookie is rejected on plain HTTP | check the DSH-side `303`/`Set-Cookie` contract; use HTTPS |
+| Bootstrap loops `/?__dsh_bridge_retry=1` | DSH keeps answering `401` after a valid exchange | inspect the exchange contract (cookie shape, Host) rather than retrying |
+
+## Compatibility
+
+The exact peers above are a compatibility **proposal**; do not publish them as a support claim until the gates pass against that version.
+
+### DSH contract anchors
+
+The bridge relies on exactly these DSH behaviors and fails closed if they change:
+
+- `ctx.connection.authenticatedUrl()` returns a tokenized loopback URL;
+- `GET /?token=<t>` answers `303` with `Location: ./`, `Cache-Control: no-store`, `Referrer-Policy: no-referrer`, and one `dsh-auth-*` cookie;
+- `401` semantics for unauthenticated requests;
+- authority-bound cookies;
+- `ctx.webServer.host`/`ctx.webServer.port`, with the web server bound to `127.0.0.1`;
+- the active `connection` trusted-host list that drives the Host/Origin fence.
+
+If DSH removes or changes any of these, the bridge must stop auto-bootstrap and return the original `401` — never synthesize cookies, read the signing secret, inject a fixed token, or bypass DSH auth.
+
+### Migration notes
+
+**DSH 0.2.1-rc migration.** The web-runtime row (`@deepseek-ai/dsh-web-app`) no longer owns `trustedHosts`, and the `webRuntime` service is gone. The connection row (`@deepseek-ai/dsh-client-connection`) owns the Host/Origin fence and its active `trustedHosts` list. This bridge therefore injects `[connection, webServer]` and cross-checks `authorities` against the live connection list. A deployment overlay written for an older alpha that still puts `trustedHosts` on the web-runtime row must move that key to the `connection` row; current web-runtime schemas reject the old key.
+
+**DSH 0.2.2-rc.1 migration.** The 0.2.1-rc contract is unchanged: the connection-owned Host/Origin fence, `authenticatedUrl()`, `ctx.webServer.host/port`, and the token-exchange/401 semantics all still match. The peer pins move together to DSH `0.2.2-rc.1`, Cordis `4.1.0`, and Schemastery `3.19.0`. Cordis 4.1.0 fixes the `ctx.plugin()` wrapper-`restart()` defect that T-DSH4b used to pin, so that test now asserts the fixed ordering (consumers see the service only after its async `Service.init` settles).
+
+**`0.1.0-alpha.7` authority migration.** `authorities` now accepts ports, IPv4, bracketed IPv6, and `localhost`. A bare name matches any port and a `host:port` entry is exact, mirroring DSH; loopback names no longer need a `connection.trustedHosts` entry. The shipped bundle no longer carries example domains, so an overlay is mandatory. A port-bearing `Host` that previously got `400` can now match a bare authority, and a port-specific trusted entry can no longer stand in for a bare authority. Roll back by reverting the version and restoring the previous overlay.
+
+**`0.1.0-alpha.8` header migration.** `Authorization` is now stripped on the request direction; the response direction is unchanged. A deployment that relied on forwarding it to DSH must terminate authentication at the proxy instead (DSH does not consume the header). `Cf-Access-Jwt-Assertion` remains stripped in both directions. Rollback: revert the version — the previous build forwarded `Authorization` verbatim.
+
+### Upgrade checklist
+
+After any DSH upgrade, before claiming compatibility:
+
+1. Rerun the **T-DSH contract probes** against the new pinned installation (focused runner, `.test-dist-probes`): token exchange `303`+cookie shape (T-DSH1), cookie matrix (T-DSH5), rotation/reactivation semantics (T-DSH6/7/10), trust fence (T-DSH8), `authorizeIndex` method matrix (T-DSH9), Cordis lifecycle (T-DSH4/4b).
+2. Rerun the **T-B browser layer** (focused runner, `.test-dist-browser`).
+3. Rerun the full local release gate — commands, prerequisites, and what counts as PASS/BLOCKED are in [`MAINTAINING.md`](https://github.com/zapsaang/dsh-web-bridge/blob/main/MAINTAINING.md#local-release-gate-all-green-before-packing).
+4. Recheck the contract anchors above.
+
+### Deployment verification gates
+
+Status of the deployment verification gates. "PASS (test layer)" means the behavior is pinned by an automated test layer in this repository; it is not production evidence. NOT RUN gates list their missing prerequisites honestly — none may be claimed from synthetic substitutes.
 
 | Gate | Status | Evidence / missing prerequisite |
 |---|---|---|
@@ -177,134 +508,31 @@ Status of the §13 gates. "PASS (test layer)" means the behavior is pinned by an
 | V7 real-device browsers | NOT RUN | Requires physical iOS/Android (incl. PWA) and desktop dual-hostname plus loopback-direct regression. |
 | T-P2 bundle activation | PARTIAL | Verified in an isolated profile (`dsh plugin --profile web add` of the real tarball): new bundle selected by default, disabled bundle not re-enabled on re-add, plain package without `dsh.bundle.patch` gets no row, inserted row shape exact. Runtime boot of the profile is BLOCKED on this machine by a DSH CLI native-addon failure (`node-addon-require-builtin`, pre-plugin-load, identical with and without the bridge) — unrelated to the bridge; rerun where the DSH CLI boots. |
 
-V1 failure stops the deployment (§15 slice 6).
+V1 failure stops the deployment. The gate table was last reviewed on 2026-11-08.
 
-## Upgrade checklist
+### Real-environment acceptance records
 
-After any DSH upgrade, before claiming compatibility (§16):
+Date-stamped deployment evidence. Test-layer PASS and static example checks are not production evidence; each NOT RUN row names the missing prerequisite.
 
-1. Rerun the **T-DSH contract probes** against the new pinned installation (focused runner, `.test-dist-probes`): token exchange 303+cookie shape (T-DSH1), cookie matrix (T-DSH5), rotation/reactivation semantics (T-DSH6/7/10), trust fence (T-DSH8), `authorizeIndex` method matrix (T-DSH9), Cordis lifecycle (T-DSH4/4b).
-2. Rerun the **T-B browser layer** (focused runner, `.test-dist-browser`).
-3. Rerun the full default gate: `corepack pnpm run typecheck && corepack pnpm run build && corepack pnpm run test && node scripts/check-pack-files.mjs`.
-4. Contract anchors the bridge relies on (§16): `ctx.connection.authenticatedUrl()`, `GET /?token=` → 303 + Set-Cookie, 401 semantics, authority-bound cookies, `ctx.webServer.host/port`, and the active `connection` trustedHosts list that drives the Host/Origin fence. If DSH removes or changes any of these, the bridge must stop auto-bootstrap and return the original 401 — never synthesize cookies, read the signing secret, inject a fixed token, or bypass DSH auth.
+| Item | Status | Date | Missing prerequisite |
+|---|---|---|---|
+| Nginx + HTTPS + Basic Auth + UDS (login, expiry recovery, SSE, WS) | NOT RUN | 2026-11-08 | no `nginx` binary on the maintainer machine; `examples/nginx.conf` passes the static checker only |
+| Caddy + HTTPS + access control + UDS (login, expiry recovery, SSE, WS) | NOT RUN | 2026-11-08 | no `caddy` binary; static checker only |
+| Cloudflare Tunnel + Access regression | NOT RUN | 2026-11-08 | no `cloudflared`/zone; V1, V2, V5 remain NOT RUN |
+| Denied external identity reaches zero bridge requests | NOT RUN | 2026-11-08 | requires a live access layer and request accounting |
+| Local UDS client probes against a real deployment | NOT RUN | 2026-11-08 | socket/DAC test suites PASS; deployment A10 NOT RUN |
+| V4 strict DAC / group socket access | PASS (test + CI) | 2026-11-08 | same-UID and CI evidence only; deployment path ACLs A10 NOT RUN |
+| V6 stale-session recovery | NOT RUN | 2026-11-08 | requires deployment cookie tampering / secret rotation |
+| V7 real-device browsers (desktop, iOS/Android, PWA) | NOT RUN | 2026-11-08 | physical devices |
 
-The exact peers above are a compatibility **proposal**; do not publish them as a support claim until these gates pass against that version.
+No row may be upgraded from synthetic substitutes. Deployment A10 (path ACLs, connector credentials, access-layer policy) remains **NOT RUN**.
 
-## Logging policy (§12.4)
+Recording an acceptance run: date, access-layer version and config hash, bridge/DSH versions, `nginx -t` or `caddy validate` output for the copied file, and the four probes (first visit, session-expiry recovery, SSE, WebSocket). For a denied identity, record that the access layer rejected the request and that the bridge observed **zero** requests.
 
-Allowed: startup/shutdown, socket path, owner/mode, DSH port, the first authority, bootstrap success/failure (error code only), upstream unavailability, dispose completion.
+### Stability evidence
 
-Forbidden — must never appear in any log: tokens, tokenized URLs, cookie values, `Cf-Access-Jwt-Assertion`, `Authorization`, complete `Cookie` headers. T-U9 pins this with synthetic secrets driven through every log path.
+A shortened **2-hour soak** of the HTTP/SSE/WebSocket profile completed with **0 readiness failures**, flat file descriptors, and a flat JS heap; the full **24-hour** soak is **NOT RUN**. Under sustained high-churn traffic, deploy with `MALLOC_ARENA_MAX=2`: the resident-memory growth observed in that soak was attributed to glibc malloc arena retention, not a bridge leak. Full evidence, toolchain, and reproduction notes live in [`MAINTAINING.md`](https://github.com/zapsaang/dsh-web-bridge/blob/main/MAINTAINING.md#verification-evidence).
 
-## Soak status
+## License
 
-- A **2-hour shortened soak** of the T-H15 profile completed (log `soak-2h.jsonl`): 937k stub HTTP + 233k real-DSH navigations (each with a real token exchange) + 89k DSH API calls, 420k SSE events, 1,066 WebSocket sessions, 2,043 slow readers, 106k mid-upload aborts, 119 bridge restarts and 39 real DSH reloads. **0 readiness failures** (readiness = the full 401 → exchange → bootstrap → marker → clean-200 cycle), fds flat (57 → 53), `heapUsed` flat (24.0 → 25.5 MB).
-- **RSS finding**: resident memory grew 187 → 249 MB (1.34×) over 2 h while the JS heap stayed flat. Isolation arms attribute this to glibc malloc arena retention under high-churn small native allocations (llhttp/zlib/socket buffers), not a bridge leak: a reload-only arm was flat-to-negative, a traffic-only arm grew ~2 MB/min, and the same traffic arm under `MALLOC_ARENA_MAX=2` cut the slope 7.7× while serving more requests. **Deploy with `MALLOC_ARENA_MAX=2`** (standard for long-lived Node services).
-- The full **24-hour** T-H15 soak remains a future run and is NOT RUN (user-scoped decision: shortened 2 h accepted for this delivery).
-- Harness note: the original soak harness lacked teardown for persistent SSE/WS/slow-reader connections and hung after the duration elapsed; fixed (in-flight registry + bounded shutdown) and re-verified — both the SIGTERM path and the duration path now exit 0 with a summary event.
-- T-H14b (other-UID DAC denial) passes under root; it is a permanent test that skips in non-privileged environments where `setpriv` cannot drop to a foreign UID.
-
-## Publishing
-
-Maintainer instructions, not a record of completed actions. The package already exists on the registry — the maintainer bootstrapped it interactively (`0.0.0-stage` placeholder, then `0.1.0-alpha.1`), so releases now go through the tag-triggered workflow below. Published versions are immutable; every fix needs a new version — current `0.1.0-alpha.5`, next new version `0.1.0-alpha.6` (the `0.2.2-rc.1` compatibility change). README changes only reach the npm page if they land before packing/publishing that version.
-
-The published name is **scoped** (`@zapsaang/dsh-web-bridge`). npm rejects the unscoped `dsh-web-bridge` with a 403 because it is too similar to the existing `dsh-webbridge` package, and that similarity check cannot be appealed — so do not "simplify" the name back to unscoped. The scope is also part of the Cordis load contract: the profile loader resolves the patch row's `name` as a bare module specifier, so `package.json`, `cordis.patch.yml`, and the plugin's exported `name` must always move together. The unscoped name has never been published; the bootstrap created the scoped `@zapsaang/dsh-web-bridge`.
-
-### Toolchain
-
-- Node `24.21.0`, npm `>=11.5.1`, pnpm `12.9.1` (development via corepack); `tar` plus the util-linux `flock` binary. The `promote-latest` CI job additionally installs `npm@11.21.1`: OIDC `npm dist-tag` requires npm `>=11.21.0` (or `>=12.2.0`), and Node `24.21.0` bundles npm 11.19.0.
-- The formal Linux A7-A9 gate also needs `getfacl` (ACL inspection) and util-linux `setpriv` (cross-UID/group probes), plus privileges sufficient to switch UID/GID and supplementary groups. These are Linux gate tools, not plugin dependencies; the gate does not install tools or change system groups/accounts.
-- The deployment target is Linux. The lease layer spawns the `flock(1)` helper, so the test suite needs it on `PATH`; on macOS it comes from Homebrew, which installs util-linux keg-only and therefore does **not** link `flock` into `PATH` for you:
-
-```sh
-export PATH="$(brew --prefix)/opt/util-linux/bin:$PATH"   # macOS only
-flock --version                                           # must resolve before running tests
-```
-
-- Frozen install: `corepack pnpm install --frozen-lockfile`.
-- Tests that bind a private `XDG_RUNTIME_DIR` need a private directory whose ancestor chain is real directories (`$HOME` works). `mktemp -d` already creates it `0700`, which is exactly what the lease directory check requires, so no `umask` change is needed. `/tmp` and `$TMPDIR` do **not** work on macOS: both live under `/var`, which is a symlink to `private/var`, and the ancestor rule rejects symlinks with `ERR_BRIDGE_LEASE_DIRECTORY`.
-
-```sh
-export XDG_RUNTIME_DIR="$(mktemp -d "$HOME/.dsh-test.XXXXXX")"
-```
-
-### Local release gate (all green before packing)
-
-```sh
-set -e                                          # any failed or BLOCKED gate stops before packing
-corepack pnpm run typecheck && corepack pnpm run build && corepack pnpm run test
-node --test .test-dist/test/dsh/*.test.js
-corepack pnpm exec playwright install chromium   # project-pinned Chromium, before browser tests
-node --test .test-dist/test/browser/*.test.js
-corepack pnpm exec tsc -p tsconfig.test.json --outDir .test-dist-linux
-node_path=$(node -p 'process.execPath')           # retain the pinned Node path across sudo
-sudo -- env PATH="$PATH" "$node_path" scripts/check-socket-access-linux.mjs  # privileged Linux A7-A9
-node scripts/check-pack-files.mjs                # pack allowlist check
-```
-
-Run the formal entry on a privileged Linux runner before packing, not as a skipped developer test or a macOS substitute. The foreign-UID workers must be able to traverse every ancestor of the workspace and read the compiled output and `node_modules` — a private home directory (for example `0750` homes, the ubuntu-24.04 default) makes the worker die at module load with a misleading `MODULE_NOT_FOUND`; open the traverse bit (`sudo chmod o+x "$HOME"`) or run from a non-private path first. **BLOCKED is nonzero (exit 2), never PASS**; assertion/runtime failures exit 1. Even a formal A7-A9 PASS leaves deployment A10 NOT RUN until the actual deployment's path ACLs and connector credentials are verified.
-
-`prepack` runs `npm run build` as the pack gate, so `npm pack`/`npm publish` do not require pnpm on PATH.
-
-Historical local baseline (2026-11-08; Linux, Node 24.21.0, `@deepseek-ai/dsh` `0.2.2-rc.1`, Cordis `4.1.0`, Schemastery `3.19.0`, util-linux `flock` 2.41.5), not current group-feature proof or a current release verdict: `typecheck` and `build` clean; default gate 540 tests → 537 pass, 0 fail, 3 skipped; DSH suite 62/62; browser suite 7/7; `check-pack-files.mjs` PASS (30 packed files). The three skips are T-H14b (needs `setpriv` to drop to a foreign UID), A7-A9 (needs a real Linux `/proc` and Unix DAC), and the foreign-owner A3 case (needs root). A host sandbox that blocks `chmod` of the setgid bit also fails the group-mode fixtures; run that gate outside such a sandbox. The `flock` dependency is the one environment prerequisite that is easy to miss: without it the whole lease layer fails with `ERR_BRIDGE_LEASE_FLOCK` rather than a clear "tool missing" message.
-
-### Pack, inspect, dry-run
-
-```sh
-npm pack                                              # real tarball
-tar -tzf ./zapsaang-dsh-web-bridge-0.1.0-alpha.6.tgz  # inspect contents
-npm publish ./zapsaang-dsh-web-bridge-0.1.0-alpha.6.tgz --dry-run --tag alpha --access public --registry https://registry.npmjs.org/
-```
-
-Do not pass `--provenance` locally; provenance comes from CI OIDC only, and a dry run is not proof of authentication or provenance. Per the npm docs, a relative tarball/folder package-spec must begin with an explicit `./` prefix; absolute paths are also accepted.
-
-A scoped package packs under a **flattened** filename — npm drops the leading `@` and turns the scope separator into a dash — so `@zapsaang/dsh-web-bridge` produces `zapsaang-dsh-web-bridge-<version>.tgz`.
-
-### First publication (bootstrap, already done)
-
-The package was bootstrapped once by the maintainer with an interactive login (2FA) and an explicit tarball publish — `0.1.0-alpha.1` and the `0.0.0-stage` placeholder are on the registry — so this step is not needed again:
-
-```sh
-npm login --registry=https://registry.npmjs.org/
-npm publish ./zapsaang-dsh-web-bridge-0.1.0-alpha.1.tgz --tag alpha --access public --registry https://registry.npmjs.org/
-```
-
-### npm Trusted Publisher
-
-Once the package exists, configure the Trusted Publisher on the `@zapsaang/dsh-web-bridge` npm package for the next unpublished version: GitHub owner `zapsaang`, repository `dsh-web-bridge` (the npm scope and the repository name deliberately differ — the package is scoped, the repo is not), workflow filename `publish.yml`, and an **empty** Environment field; on new settings select **Allow npm publish** and also enable **Allow npm dist-tag** (stage-only is the default); the dist-tag permission is what lets the `promote-latest` job move `latest` over OIDC, and it is independent of the publish permission. The workflow deliberately declares no `environment:`, so the two sides must stay consistent — naming an environment here that the job does not use (or the reverse) makes npm reject the OIDC exchange. Existing connections cannot change their provider fields, but their allowed actions can be updated in place; if the settings UI refuses the change, delete and recreate the connection and land the next publish within 48 hours to validate it. An initial successful OIDC release must land within 2 days of configuration or it expires and must be recreated. See https://docs.npmjs.com/trusted-publishers/.
-
-### Release workflow (`.github/workflows/publish.yml`)
-
-- Two triggers: pushing a tag named `v<version>` (for example `v0.1.0-alpha.2`) publishes automatically, and manual `workflow_dispatch` stays available. Dispatch inputs: `expected_version` (required, must match `package.json`, format `X.Y.Z-alpha.N`) and `publish` (boolean, default `false`). A tag trigger always publishes; a dispatch publishes only with `publish: true` on `refs/heads/main`.
-- The tag name is the single source of truth for the version. The version-resolution step strips an optional `v` prefix, exports it as `EXPECTED_VERSION`, and `scripts/check-release.mjs` then requires the ref to be either `refs/heads/main` or a tag naming exactly that version, plus a manifest carrying the same version. Tag-only glob filters (`v*`) are deliberate: Actions branch/tag filters are globs, not regexes, so the strict `X.Y.Z-alpha.N` check lives in the guard.
-
-```sh
-git switch main && git pull --ff-only
-git tag -a v0.1.0-alpha.2 -m "0.1.0-alpha.2"
-git push origin v0.1.0-alpha.2
-```
-
-- The tag must point at a commit that is already on `main`: `verify` re-checks ancestry with `git merge-base --is-ancestor` against `origin/main`, which is why its checkout uses `fetch-depth: 0`. It must also contain the workflow file you intend to run — a tag on an older commit runs that commit's workflow revision.
-- Keep the trigger in `publish.yml`. The npm Trusted Publisher is bound to that workflow **filename** (plus its empty environment field), so a second workflow file would require reconfiguring the publisher (and an initial OIDC publish within 2 days of that change). That is also why `promote-latest` is a job in this file rather than its own workflow.
-- Job `verify`: full gates (typecheck/build/default tests plus the explicit compiled DSH and browser suites), project-pinned Chromium install, and the compiled privileged formal Linux A7-A9 matrix via `sudo` with the pinned Node path, then real `npm pack` and tarball inspection, `npm publish <tarball> --dry-run`, uploads the tarball as an artifact. A BLOCKED formal gate stops the job before packing; deployment A10 is separate.
-- Job `publish`: runs when the trigger is a tag, or when a dispatch passes `publish: true` on `main`; permissions `contents: read, id-token: write`; OIDC Trusted Publisher authentication, no `NPM_TOKEN`. Publishes the exact verified tarball artifact (checksum re-verified), never a rebuild.
-- Job `promote-latest`: runs only after `publish` succeeded. It reads the registry's current `latest`, derives the channel of the released version from its version string (`alpha` for `-alpha.N`, `rc` for `-rc.N`, `stable` for no suffix), and runs `npm dist-tag add @zapsaang/dsh-web-bridge@<version> latest` only when the channels match **and** the released version is newer than the current `latest`. Any other state — no `latest`, an unparsable current tag such as `0.0.0-stage`, an equal or older version, or a channel change — is a no-op that exits 0 with the reason in the run summary. It authenticates with OIDC (`contents: read, id-token: write`, no `NPM_TOKEN`) and installs `npm@11.21.1` because Node 24.21.0's npm 11.19.0 cannot manage dist-tags over OIDC; the publish job keeps using the bundled npm. npm normally answers the publish request before the version document is readable ("being processed and may take a few minutes"), so the job polls the version document for up to 36 attempts × 5 s (`PROMOTE_LATEST_PUBLISH_ATTEMPTS` / `PROMOTE_LATEST_PUBLISH_DELAY_MS`) before moving `latest`; a version that never appears still fails closed. The job is idempotent, so if it fails after the publish succeeded, `Re-run failed jobs` re-runs only `promote-latest`.
-- `latest` is channel-local: it never jumps from alpha to rc or stable, or back. Switching channels (for example, letting the first stable release take over) is a deliberate maintainer action with an authenticated CLI, after which CI keeps `latest` on the new channel:
-
-```sh
-npm dist-tag add @zapsaang/dsh-web-bridge@<version> latest
-```
-- There is no GitHub Environment, so a tag push publishes **unattended** — no approval step, matching the tag-triggered OIDC setup in the other `zapsaang` npm packages. The gates on this path are the deliberate tag push itself, job `verify`, and the release guard's requirement that the tag name equals the reviewed `package.json` version. Restoring a required-reviewer gate means re-adding `environment: npm` here, setting the same environment in the npm Trusted Publisher config, and allowing the `v*` tag pattern under that environment's "Deployment branches and tags" — a `main`-only rule there blocks a tag-triggered job before OIDC runs.
-- Automatic provenance applies only when **both** the GitHub repository and the npm package are public.
-- After an authorized publish, verify separately, e.g. for `0.1.0-alpha.2`:
-
-```sh
-npm view @zapsaang/dsh-web-bridge@0.1.0-alpha.2 version dist.attestations --json
-npm view @zapsaang/dsh-web-bridge dist-tags --json
-```
-
-  and inspect the version page (https://www.npmjs.com/package/@zapsaang/dsh-web-bridge/v/0.1.0-alpha.2) for the provenance indicator. The `promote-latest` job records the current `latest`, the released version, and the move/skip reason in the run summary; `npm view @zapsaang/dsh-web-bridge dist-tags --json` is the registry-side check.
-
-### Installing from npm
-
-Check what actually exists: `npm view @zapsaang/dsh-web-bridge dist-tags --json`. Prefer explicit versions (`@zapsaang/dsh-web-bridge@0.1.0-alpha.6`) or `@alpha`; on a first publication the tag layout can vary, so inspect the registry rather than assuming `latest` exists or that `alpha` can never point at the newest version. `latest` is moved automatically by CI only inside the channel it already points at; changing channels is a manual maintainer action.
+MIT — see [`LICENSE`](https://github.com/zapsaang/dsh-web-bridge/blob/main/LICENSE).

@@ -1,14 +1,19 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { request as openUpstream } from 'node:http';
 import type { Duplex } from 'node:stream';
-import { isIP } from 'node:net';
 import { createHash } from 'node:crypto';
 import type { ExchangeEndpoint } from './session.js';
 import { exchange } from './session.js';
 import type { RawHeaders } from './headers.js';
-import { filterHopByHopHeaders, rawHeaderValues, rejectConnectionNominations, ConnectionNominationError } from './headers.js';
+import {
+  filterHopByHopHeaders, rawHeaderValues, rejectConnectionNominations, stripRequestAuthorization,
+  stripSensitiveProxyHeaders, ConnectionNominationError,
+} from './headers.js';
 import { ensureSecure } from './cookie.js';
 import { createBootstrapResponse } from './bootstrap.js';
+import { isCanonicalAuthority, matchesAnyAuthority, parseAuthority } from './authority.js';
+
+export { isCanonicalAuthority } from './authority.js';
 
 export interface RequestHead {
   readonly method: string;
@@ -20,11 +25,6 @@ export interface RejectionResponse {
   readonly statusCode: 400 | 403;
   readonly headers: Readonly<Record<string, string>>;
   readonly body: string;
-}
-
-export function isCanonicalAuthority(authority: string): boolean {
-  return authority.length > 0 && authority.length <= 253 && isIP(authority) === 0 &&
-    authority.split('.').every(label => label.length <= 63 && /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/.test(label));
 }
 
 export function validateAuthorities(authorities: readonly string[]): boolean {
@@ -62,18 +62,23 @@ export function stripRetryMarker(target: string): string {
 }
 
 export function classifyRequest(request: RequestHead, authorities: readonly string[]): 400 | 403 | undefined {
-  const hosts = rawHeaderValues(request.rawHeaders, 'host');
-  const host = hosts[0];
-  if (!isOriginFormTarget(request.target) || hosts.length !== 1 || host === undefined ||
-    [...host].some(character => character.charCodeAt(0) > 127) ||
-    !isCanonicalAuthority(host.toLowerCase()) || hasTokenQuery(request.target)) return 400;
+  // Node keeps the first duplicate Host and DSH parses that same value, so the
+  // bridge must judge the first one too: rejecting duplicates would be stricter
+  // than the fence this request is about to pass.
+  const host = rawHeaderValues(request.rawHeaders, 'host')[0];
+  // One parser decides syntax for both the configured list and the wire Host,
+  // mirroring DSH's WHATWG URL handling. A bare entry matches any port; an
+  // explicit `host:port` entry is exact.
+  const authority = host === undefined ? undefined : parseAuthority(host);
+  if (!isOriginFormTarget(request.target) || authority === undefined ||
+    hasTokenQuery(request.target)) return 400;
   try {
     rejectConnectionNominations(request.rawHeaders);
   } catch (error) {
     if (error instanceof ConnectionNominationError) return 400;
     throw error;
   }
-  return authorities.includes(host.toLowerCase()) ? undefined : 403;
+  return matchesAnyAuthority(authority, authorities) ? undefined : 403;
 }
 
 const HTTP_TOKEN = "[!#$%&'*+\\-.^_`|~0-9A-Za-z]+";
@@ -259,7 +264,9 @@ function proxyRequest(
 ): Promise<void> {
   return new Promise((resolve) => {
     const timeouts: BridgeTimeouts = { ...DEFAULT_TIMEOUTS, ...runtime.timeouts };
-    const outbound = removeHeader(filterHopByHopHeaders(head.rawHeaders), 'expect');
+    const outbound = removeHeader(filterHopByHopHeaders(
+      stripRequestAuthorization(stripSensitiveProxyHeaders(head.rawHeaders)),
+    ), 'expect');
     const timers = new Set<NodeJS.Timeout>();
     const arm = (milliseconds: number, fire: () => void): NodeJS.Timeout => {
       const timer = setTimeout(() => {
@@ -347,7 +354,7 @@ function proxyRequest(
 
     const relayResponse = (upRes: IncomingMessage, status: number, earlyFinal: boolean): void => {
       const noBody = head.method === 'HEAD' || status === 204 || status === 304;
-      let headers = applyEnsureSecure(filterHopByHopHeaders(upRes.rawHeaders));
+      let headers = applyEnsureSecure(stripSensitiveProxyHeaders(filterHopByHopHeaders(upRes.rawHeaders)));
       if (status === 204) headers = removeHeader(headers, 'content-length');
       committed = true;
       response.writeHead(status, headers as string[]);
@@ -548,7 +555,9 @@ function proxyUpgrade(
   const requestedExtensions = splitTokens(rawHeaderValues(head.rawHeaders, 'sec-websocket-extensions'))
     .map((extension) => extension.split(';')[0]?.trim() ?? '');
 
-  const outbound: string[] = [...removeHeader(filterHopByHopHeaders(head.rawHeaders), 'expect')];
+  const outbound: string[] = [...removeHeader(filterHopByHopHeaders(
+    stripRequestAuthorization(stripSensitiveProxyHeaders(head.rawHeaders)),
+  ), 'expect')];
   outbound.push('Connection', 'Upgrade', 'Upgrade', 'websocket');
 
   let committed = false;
@@ -637,7 +646,7 @@ function proxyUpgrade(
     }
     committed = true;
     const status = upRes.statusCode ?? 502;
-    let headers = applyEnsureSecure(filterHopByHopHeaders(upRes.rawHeaders));
+    let headers = applyEnsureSecure(stripSensitiveProxyHeaders(filterHopByHopHeaders(upRes.rawHeaders)));
     headers = removeHeader(headers, 'content-length');
     const lines = [`HTTP/1.1 ${status} ${upRes.statusMessage ?? ''}`];
     for (let index = 0; index < headers.length; index += 2) {

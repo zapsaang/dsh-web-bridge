@@ -5,7 +5,7 @@ import test from 'node:test';
 import { Context } from '@deepseek-ai/cordis';
 import * as bridge from '../../src/dsh/index.js';
 import { cleanup, poll, tempDir } from '../lifecycle/helpers.js';
-import { authority, isolated } from './harness.js';
+import { authority, isolated, send } from './harness.js';
 
 function errorCode(error: unknown): string | undefined {
   let current = error;
@@ -94,4 +94,58 @@ test('T-DSH3e: a real rc connection without the authority fails closed before bi
     (error: unknown) => errorCode(error) === 'ERR_BRIDGE_AUTHORITY_TRUST',
   );
   await assert.rejects(access(socketPath), /ENOENT/, 'no UDS created when the cross-check trips');
+});
+
+test('T-DSH3f: a port-bearing authority and trusted entry pass the cross-check and the native fence', async (t) => {
+  // Given a real pinned DSH tree whose Connection trusts the exact port
+  await using app = await isolated([`${authority}:8443`]);
+  const dir = await tempDir();
+  t.after(() => cleanup(dir));
+  const socketPath = join(dir, 'bridge.sock');
+  app.ctx.connection.fetch.register({
+    path: '/api/native-probe', methods: ['GET'], requestBody: 'buffered',
+    fetch: async () => new Response('native-admitted'),
+  });
+  // When the bridge loads with the same port-bearing authority
+  const fiber = await app.ctx.plugin(bridge, { socketPath, authorities: [`${authority}:8443`] });
+  await fiber.await();
+  await poll(async () => access(socketPath).then(() => true, () => false));
+  // Then the native fence admits the port-bearing Host (401 only because no cookie is sent)
+  const response = await send(app.port, { path: '/api/native-probe', headers: { host: `${authority}:8443` } });
+  assert.equal(response.status, 401);
+  await fiber.dispose();
+});
+
+test('T-DSH3g: a loopback authority needs no trustedHosts entry and the native fence admits its Host', async (t) => {
+  // Given a real pinned DSH tree with an empty deployment authority list
+  await using app = await isolated([]);
+  const dir = await tempDir();
+  t.after(() => cleanup(dir));
+  const socketPath = join(dir, 'bridge.sock');
+  app.ctx.connection.fetch.register({
+    path: '/api/native-probe', methods: ['GET'], requestBody: 'buffered',
+    fetch: async () => new Response('native-admitted'),
+  });
+  // When the bridge is configured for a loopback authority (D5: no trust entry needed)
+  const fiber = await app.ctx.plugin(bridge, { socketPath, authorities: ['localhost:8080'] });
+  await fiber.await();
+  await poll(async () => access(socketPath).then(() => true, () => false));
+  // Then DSH's own loopback fence admits the Host without a trustedHosts entry
+  const response = await send(app.port, { path: '/api/native-probe', headers: { host: 'localhost:8080' } });
+  assert.equal(response.status, 401);
+  await fiber.dispose();
+});
+
+test('T-DSH3h: a port-specific real trusted entry cannot cover a port-less authority', async (t) => {
+  // Given a real pinned DSH tree that trusts only the explicit port
+  await using app = await isolated([`${authority}:8443`]);
+  const dir = await tempDir();
+  t.after(() => cleanup(dir));
+  const socketPath = join(dir, 'bridge.sock');
+  // When / Then a port-less authority still fails closed before binding
+  await assert.rejects(
+    async () => app.ctx.plugin(bridge, { socketPath, authorities: [authority] }),
+    (error: unknown) => errorCode(error) === 'ERR_BRIDGE_AUTHORITY_TRUST',
+  );
+  await assert.rejects(access(socketPath), /ENOENT/);
 });

@@ -8,3 +8,4 @@ import './pack/bridge-reload.test.js';
 import './pack/manifest.test.js';
 import './pack/tarball.test.js';
 import './pack/prepack.test.js';
+import './pack/examples.test.js';

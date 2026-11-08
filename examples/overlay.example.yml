@@ -1,0 +1,55 @@
+# Deployment overlay for @zapsaang/dsh-web-bridge.
+#
+# The shipped bundle activates the plugin with only `socketPath`. It carries no
+# example authorities (so a fresh install fails to load with an actionable
+# message until this overlay supplies one), and it never trusts a placeholder
+# domain by accident.
+#
+# Cordis patch semantics: a row's config is replaced wholesale, not deep-merged.
+# Restate every key you need, including `socketPath`.
+#
+# `authorities` follows the same rule DSH applies to `trustedHosts`: a bare
+# host[:port] authority that survives WHATWG parsing unchanged (case aside), so
+# host, host:port, IPv4, bracketed IPv6, and localhost are all valid. A bare name
+# matches any port; `host:port` is exact. Non-loopback authorities must also be
+# covered by the connection row's `trustedHosts` (bare name covers any port;
+# `host:port` is exact). Loopback names and the listener bind address are
+# accepted by DSH without a trustedHosts entry.
+#
+# Security note: DSH accepts `Host: localhost`, `127.0.0.1`, `[::1]`, and its own
+# bind address unconditionally. Only configure a loopback authority when the
+# socket is not fronted by an untrusted public proxy, or make that proxy rewrite
+# the Host or reject non-allowlisted names.
+
+- id: dsh-web-bridge
+  name: '@zapsaang/dsh-web-bridge'
+  inject: [connection, webServer]
+  config:
+    socketPath: /run/dsh-web/session-bridge.sock
+    authorities:
+      - dsh.example.com
+
+# DSH-side rows. The webserver stays on loopback; the connection row owns the
+# Host/Origin fence and must trust the same public authority.
+- id: webserver
+  name: '@deepseek-ai/dsh-host-webserver'
+  inject: [webStartup]
+  config:
+    host: '127.0.0.1'
+    port: !!js ctx.webStartup.port ?? 3080
+    compression: gzip
+    compressionLevel: 1
+    compressionThresholdBytes: 1024
+- id: web-runtime
+  name: '@deepseek-ai/dsh-web-app'
+  inject: [webStartup]
+  config:
+    openBrowser: false
+    printUrl: false
+    surfaceContext: true
+    publicUrl: !!js ctx.webStartup.publicUrl   # optional; omit when no public root is advertised
+- id: connection
+  name: '@deepseek-ai/dsh-client-connection'
+  inject: [webStartup]
+  config:
+    trustedHosts: !!js "['dsh.example.com', ...ctx.webStartup.trustedHosts]"

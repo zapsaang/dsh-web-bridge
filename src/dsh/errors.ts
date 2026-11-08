@@ -17,7 +17,7 @@ export class BridgeLoopbackGuardError extends Error {
 export class BridgeAuthorityTrustError extends Error {
   readonly code = 'ERR_BRIDGE_AUTHORITY_TRUST';
   constructor() {
-    super('dsh web bridge authorities must be bare public names accepted by the connection trustedHosts.');
+    super('dsh web bridge authorities must be canonical host, host:port, IPv4, or bracketed IPv6 values accepted by the connection trustedHosts; loopback names and the bind address are exempt.');
     this.name = 'BridgeAuthorityTrustError';
   }
 }

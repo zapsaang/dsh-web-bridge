@@ -1,0 +1,36 @@
+# Deployment example: Caddy + automatic TLS + access authentication + Unix socket.
+#
+# Repository-only file: it is NOT part of the npm tarball. Replace the site
+# address and the password hash before use. Caddy >= 2.8 is required for
+# `basic_auth` (older releases spell it `basicauth`).
+#
+# `scripts/check-examples.mjs` statically checks this file in CI; it does not run
+# `caddy validate`, so validate the copy on the deployment host.
+
+dsh.example.com {
+    # --- External authentication: enable exactly one mechanism ---
+    basic_auth {
+        dsh $2a$14$REPLACE_WITH_A_BCRYPT_HASH
+    }
+
+    # OIDC alternative via forward_auth (disable basic_auth above):
+    # forward_auth 127.0.0.1:4180 {
+    #     uri /oauth2/auth
+    #     copy_headers X-Auth-Request-User
+    # }
+
+    reverse_proxy unix//run/dsh-web/session-bridge.sock {
+        # Caddy forwards the original Host (including an explicit port) by
+        # default. Do not rewrite it with {host}, which drops the port and would
+        # break an exact `host:port` authority. The bridge also strips
+        # Authorization on the request direction; clearing it here is defense
+        # in depth.
+        header_up -Authorization
+        # Stream SSE and other long-lived responses without buffering.
+        flush_interval -1
+        transport http {
+            read_timeout 1h
+            write_timeout 1h
+        }
+    }
+}

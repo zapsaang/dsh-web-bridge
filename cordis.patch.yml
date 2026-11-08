@@ -4,4 +4,3 @@
       inject: [connection, webServer]
       config:
         socketPath: /run/dsh-web/session-bridge.sock
-        authorities: [dsh.example.com, dsh2.example.com]

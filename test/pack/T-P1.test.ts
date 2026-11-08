@@ -9,9 +9,10 @@ import * as bridge from '../../src/dsh/index.js';
 import { cleanup, tempDir } from '../lifecycle/helpers.js';
 
 // §14.7 T-P1: the pinned overlay must load and actually insert one row whose
-// shape matches the plugin contract; the Config schema is exactly
-// socketPath (concrete default) + required finite authorities; startup
-// cross-checks authorities ⊆ the active connection trustedHosts bare names.
+// shape matches the plugin contract; the published config carries only
+// socketPath, so authorities must come from a deployment overlay; startup then
+// cross-checks each authority against the active connection trustedHosts with
+// the same semantics as the DSH /api Host fence.
 
 interface YamlModule {
   load: (text: string) => unknown;
@@ -34,10 +35,10 @@ function overlayRows(): { insert: OverlayRow[] }[] {
   return parsed as { insert: OverlayRow[] }[];
 }
 
-test('T-P1a: pinned overlay parses as a single append-mode insert of the bridge row', () => {
+test('T-P1a: the published bundle activates the bridge with socketPath only; a deployment overlay supplies authorities', () => {
   // Given / When
   const patches = overlayRows();
-  // Then
+  // Then: one append-mode insert row whose name/inject match the plugin surface.
   assert.equal(patches.length, 1, 'exactly one patch entry');
   const patch = patches[0];
   assert.ok(patch && typeof patch === 'object', 'patch entry exists');
@@ -49,21 +50,21 @@ test('T-P1a: pinned overlay parses as a single append-mode insert of the bridge 
   assert.equal(row.id, 'dsh-web-bridge');
   assert.equal(row.name, bridge.name, 'row name matches the exported plugin name');
   assert.deepEqual([...row.inject].sort(), [...bridge.inject].sort(), 'row inject matches the exported inject');
-  assert.deepEqual(Object.keys(row.config).sort(), ['authorities', 'socketPath'], 'config is exactly the two schema keys');
+  // D3=A: the published bundle carries no example domains, only the socket path.
+  assert.deepEqual(Object.keys(row.config).sort(), ['socketPath'], 'config is the single shipped key');
   assert.equal(row.config['socketPath'], '/run/dsh-web/session-bridge.sock', 'concrete default socket path');
-  const authorities = row.config['authorities'];
-  assert.ok(Array.isArray(authorities) && authorities.length > 0, 'required finite authorities');
-  // The whole overlay config must pass the shipped Config schema unchanged.
-  const normalized = bridge.Config(row.config);
+  // Loading the shipped row alone fails with an actionable message rather than a
+  // generic schema error: authorities is a deployment decision.
+  assert.throws(() => bridge.Config(row.config), (error: unknown) =>
+    error instanceof Error && /add a bridge overlay with authorities/.test(error.message));
+  // A deployment overlay restates socketPath and supplies the authority list.
+  const overlay = { ...row.config, authorities: ['dsh.example.com'] };
+  const normalized = bridge.Config(overlay);
   assert.deepEqual(normalized, {
     socketPath: row.config['socketPath'],
-    authorities: row.config['authorities'],
+    authorities: ['dsh.example.com'],
     socketAccess: 'strict',
   });
-  for (const authority of normalized.authorities) {
-    assert.ok(!authority.includes(':'), `${authority} is a bare name without a port`);
-    assert.equal(authority, authority.toLowerCase(), `${authority} is a bare canonical name`);
-  }
 });
 
 function errorCode(error: unknown): string | undefined {
@@ -110,6 +111,8 @@ test('T-P1c: startup fails closed when an authority is absent from the trusted b
   await assert.rejects(access(socketPath), /ENOENT/, 'no UDS created when the cross-check trips');
 });
 
+// DSH's port-bearing trusted entry matches only that exact authority, so it can
+// never cover a port-less authority (D3/D5 parity; the red-for-a-reason case).
 test('T-P1d: a port-bearing trusted entry does not satisfy the bare-name requirement', async (t) => {
   // Given
   const dir = await tempDir();

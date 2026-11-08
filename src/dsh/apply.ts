@@ -3,6 +3,7 @@ import type { IncomingMessage, Server, ServerResponse } from 'node:http';
 import type { Config } from './index.js';
 import { BridgeAuthorityTrustError, BridgeLoopbackGuardError, BridgeNotImplementedError } from './errors.js';
 import { acquire, cancelled, type LeaseIo, type SocketLease } from '../lib/socket.js';
+import { isAuthorityTrusted, parseAuthority } from '../lib/authority.js';
 import { handleCheckContinue, handleRequest, handleUpgrade, type BridgeRuntime } from '../lib/bridge.js';
 
 // As of dsh 0.2.1-rc.2 the web-runtime row no longer owns trustedHosts: the
@@ -10,15 +11,28 @@ import { handleCheckContinue, handleRequest, handleUpgrade, type BridgeRuntime }
 // active authority list. The field is private to HostConnectionService, so this
 // check reads it structurally (like the previous webRuntime.trustedHosts
 // anchor) and fails closed when it is absent or not a string list.
-function assertAuthorityTrust(ctx: Context, authorities: readonly string[]): void {
+function readTrustedHosts(ctx: Context): readonly string[] {
   const value: unknown = ctx.get('connection');
   if (typeof value !== 'object' || value === null || !('trustedHosts' in value)) throw new BridgeAuthorityTrustError();
   const trusted: unknown = value.trustedHosts;
   if (!Array.isArray(trusted) || !trusted.every((entry: unknown): entry is string => typeof entry === 'string')) {
     throw new BridgeAuthorityTrustError();
   }
-  const bare = new Set(trusted.filter((entry) => !entry.includes(':')).map((entry) => entry.toLowerCase()));
-  if (!authorities.every((authority) => bare.has(authority))) throw new BridgeAuthorityTrustError();
+  return trusted;
+}
+
+// Mirror the /api Host fence: loopback names and the listener bind address are
+// accepted by DSH without a trustedHosts entry; everything else must be covered
+// by an entry that DSH would also accept for this authority (bare name matches
+// any port, host:port is exact). Fails closed before any socket is created.
+function assertAuthorityTrust(ctx: Context, authorities: readonly string[], bindHost: string): void {
+  const trusted = readTrustedHosts(ctx);
+  for (const candidate of authorities) {
+    const authority = parseAuthority(candidate);
+    if (authority === undefined || !isAuthorityTrusted(authority, trusted, bindHost)) {
+      throw new BridgeAuthorityTrustError();
+    }
+  }
 }
 
 function connectionUrlFactory(ctx: Context): (baseUrl: string) => string {
@@ -32,7 +46,7 @@ function connectionUrlFactory(ctx: Context): (baseUrl: string) => string {
   };
 }
 
-function loopbackPort(ctx: Context): number {
+function webServerBinding(ctx: Context): { readonly host: string; readonly port: number } {
   const value: unknown = ctx.get('webServer');
   if (typeof value !== 'object' || value === null || !('host' in value) || !('port' in value)) {
     throw new BridgeLoopbackGuardError();
@@ -41,7 +55,7 @@ function loopbackPort(ctx: Context): number {
   if (host !== '127.0.0.1' || typeof port !== 'number' || !Number.isInteger(port) || port < 1 || port > 65535) {
     throw new BridgeLoopbackGuardError();
   }
-  return port;
+  return { host, port };
 }
 
 export function makeApply(dependencies: {
@@ -49,8 +63,8 @@ export function makeApply(dependencies: {
   readonly createServer: () => Server;
 }): (ctx: Context, config: Config) => Promise<() => Promise<void>> {
   return async (ctx, config) => {
-    const port = loopbackPort(ctx);
-    assertAuthorityTrust(ctx, config.authorities);
+    const binding = webServerBinding(ctx);
+    assertAuthorityTrust(ctx, config.authorities, binding.host);
     const server = dependencies.createServer();
     const controller = new AbortController();
     let ready = false;
@@ -69,7 +83,7 @@ export function makeApply(dependencies: {
     });
     ctx.effect(() => cleanup);
     const runtime: BridgeRuntime = {
-      endpoint: { port, authenticatedUrl: connectionUrlFactory(ctx) },
+      endpoint: { port: binding.port, authenticatedUrl: connectionUrlFactory(ctx) },
       authorities: config.authorities,
       signal: controller.signal,
     };

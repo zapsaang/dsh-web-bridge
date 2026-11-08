@@ -73,6 +73,30 @@ async function rawWsRoundTrip(bridgePort: number, bytes: string, waitMs = 300): 
 }
 
 describe('T-H8 WebSocket stub matrix (no fabricated DSH route)', () => {
+  test('upgrade strips proxy credentials in both directions', async () => {
+    // Given an upstream that echoes a 101 with a proxy identity response header
+    const upstream = await startRawUpstream((socket, _requestHead, reply) => {
+      reply(`HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n`
+        + `Sec-WebSocket-Accept: ${acceptFor(KEY)}\r\nCf-Access-Jwt-Assertion: synthetic.response.jwt\r\n\r\n`);
+    });
+    const bridge = await startBridge(makeRuntime(upstream.port));
+    try {
+      // When the handshake carries proxy credentials
+      const response = await rawWsRoundTrip(bridge.port, handshakeRequest({
+        extraHeaders: 'Authorization: Basic dXNlcjpwYXNz\r\nCf-Access-Jwt-Assertion: synthetic.request.jwt\r\n',
+      }));
+      // Then neither reaches DSH, and the JWT response header is stripped too
+      const requestText = upstream.requests[0]?.toString('latin1') ?? '';
+      assert.equal(/^(?:authorization|cf-access-jwt-assertion):/im.test(requestText), false);
+      const responseText = response.toString('latin1');
+      assert.match(responseText, /^HTTP\/1\.1 101/);
+      assert.equal(/^cf-access-jwt-assertion:/im.test(responseText), false);
+    } finally {
+      await bridge.close();
+      await upstream.close();
+    }
+  });
+
   test('malformed handshakes are 400 with zero upstream connections', async () => {
     // Given a bridge whose upstream counts connections
     let connections = 0;

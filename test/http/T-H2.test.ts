@@ -64,6 +64,43 @@ describe('T-H2 exchange mechanics and bootstrap response', () => {
     }
   });
 
+  // The bootstrap trigger is decided by method, path, upstream status, and
+  // Fetch-Metadata/Accept only. Authorization and the CF_Authorization cookie
+  // are not inputs; the proxy credential is stripped from the forwarded request
+  // while the browser cookie is forwarded untouched (Cookie stripping is out of
+  // scope for this change).
+  for (const [label, extra, expectedCookie] of [
+    ['without credentials', {}, undefined],
+    ['with Authorization only', { authorization: 'Bearer synthetic' }, undefined],
+    ['with CF_Authorization cookie only', { cookie: 'CF_Authorization=synthetic' }, 'CF_Authorization=synthetic'],
+    ['with both', { authorization: 'Basic synthetic', cookie: 'CF_Authorization=synthetic; a=1' }, 'CF_Authorization=synthetic; a=1'],
+  ] as const) {
+    test(`T-H2b bootstrap is independent of Authorization and CF_Authorization: ${label}`, async () => {
+      // Given the exchange-capable stub
+      const upstream = await startBootstrapStub();
+      const runtime = makeRuntime(upstream.port, {
+        endpoint: { port: upstream.port, authenticatedUrl: () => `http://127.0.0.1:${upstream.port}/?token=stub-token-b` },
+      });
+      const bridge = await startBridge(runtime);
+      try {
+        // When the qualified navigation carries (or omits) those credentials
+        const response = await callBridge(bridge.port, {
+          headers: { host: 'dsh.example.com', 'sec-fetch-mode': 'navigate', 'sec-fetch-dest': 'document', ...extra },
+        });
+        // Then the bootstrap is identical and exactly one exchange happened
+        assert.equal(response.status, 200);
+        assert.equal(response.body.toString('utf8'), BOOTSTRAP_HTML);
+        assert.equal(upstream.requests.length, 2);
+        const proxied = upstream.requests[0]?.rawHeaders ?? [];
+        assert.equal(headerValue(proxied, 'authorization'), undefined);
+        assert.equal(headerValue(proxied, 'cookie'), expectedCookie);
+      } finally {
+        await bridge.close();
+        await upstream.close();
+      }
+    });
+  }
+
   test('legacy navigation with a single Accept: text/html (no Fetch Metadata) bootstraps', async () => {
     // Given the exchange-capable stub
     const upstream = await startBootstrapStub();

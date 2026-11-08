@@ -87,6 +87,39 @@ describe('T-H1 full proxy round-trip fidelity', () => {
     }
   });
 
+  test('Authorization is stripped on the request direction; the response direction is untouched', async () => {
+    // Given an upstream that reports the request headers it received and sets
+    // an Authorization response header (DSH never does; this pins the decision).
+    const upstream = await startUpstream((_request, response) => {
+      response.writeHead(200, [
+        'authorization', 'Bearer upstream-template',
+        'cf-access-jwt-assertion', 'synthetic.response.jwt',
+      ]);
+      response.end('ok');
+    });
+    const bridge = await startBridge(makeRuntime(upstream.port));
+    try {
+      // When the access layer leaves proxy credentials in the request
+      const response = await callBridge(bridge.port, {
+        headers: {
+          'host': 'dsh.example.com',
+          'authorization': 'Basic dXNlcjpwYXNz',
+          'cf-access-jwt-assertion': 'synthetic.request.jwt',
+        },
+      });
+      // Then DSH receives neither credential (D2: request direction strips Authorization)
+      const seen = upstream.requests[0]?.rawHeaders ?? [];
+      assert.equal(headerValue(seen, 'authorization'), undefined);
+      assert.equal(headerValue(seen, 'cf-access-jwt-assertion'), undefined);
+      // And the response keeps Authorization untouched while the JWT header is stripped
+      assert.equal(headerValue(response.rawHeaders, 'authorization'), 'Bearer upstream-template');
+      assert.equal(headerValue(response.rawHeaders, 'cf-access-jwt-assertion'), undefined);
+    } finally {
+      await bridge.close();
+      await upstream.close();
+    }
+  });
+
   test('Connection nominating a protected header is rejected with 400 and zero upstream hits', async () => {
     // Given a request whose Connection header nominates Cookie
     const upstream = await startUpstream((_request, response) => response.end('ok'));

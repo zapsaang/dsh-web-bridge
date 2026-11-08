@@ -87,6 +87,9 @@ jobs:
           corepack pnpm run test
           node --test .test-dist/test/dsh/*.test.js
           node --test .test-dist/test/browser/*.test.js
+      - name: Static deployment-example checks (no docker)
+        shell: bash
+        run: node scripts/check-examples.mjs
       - name: Mandatory real Linux socket access acceptance (A7-A9)
         shell: bash
         run: |

@@ -108,6 +108,8 @@ export async function startAccessStub(bridgePort: number): Promise<AccessStub> {
 // Full chromium honors --unsafely-treat-insecure-origin-as-secure (headless shell
 // ignores it); first-match-wins: both example hosts map to the Access stub with a
 // port-less Host header, every other name resolves NOTFOUND (offline guarantee).
+// --no-proxy-server keeps a host system proxy out of the fixture: the resolver
+// map is the only route these names may take.
 export async function launchBrowser(accessPort: number): Promise<Browser> {
   return chromium.launch({
     channel: 'chromium',
@@ -115,6 +117,7 @@ export async function launchBrowser(accessPort: number): Promise<Browser> {
       `--host-resolver-rules=MAP ${AUTHORITY} 127.0.0.1:${accessPort}, ` +
       `MAP ${OTHER_AUTHORITY} 127.0.0.1:${accessPort}, MAP * ~NOTFOUND`,
       `--unsafely-treat-insecure-origin-as-secure=http://${AUTHORITY},http://${OTHER_AUTHORITY}`,
+      '--no-proxy-server',
     ],
   });
 }
