@@ -81,7 +81,7 @@ function initialSocketEnoentBarrier(socketPath: string, mutation: () => Promise<
   };
 }
 
-for (const [label, mode] of [['setgid removed', 0o710], ['group write added', 0o2730]] as const) {
+for (const [label, mode] of [['other access added', 0o2711], ['group traverse removed', 0o2700]] as const) {
   test(`A3: native prebind parent recheck rejects when ${label} after initial trust`, { timeout: 5000 }, async (t) => {
     // Given: valid native parent, independently held flock at the named barrier.
     const fixture = await groupParent(t);

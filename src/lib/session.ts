@@ -19,6 +19,7 @@ export function isValidUriReference(value: string): boolean {
 }
 
 export interface ExchangeEndpoint {
+  readonly host?: string | undefined;
   readonly port: number;
   readonly authenticatedUrl: (baseUrl: string) => string;
 }
@@ -48,9 +49,12 @@ export function exchange(input: ExchangeInput): Promise<ExchangeResult> {
   if (input.signal.aborted) return Promise.resolve({ kind: 'cancelled' });
   const deadline = AbortSignal.timeout(input.timeout ?? EXCHANGE_TIMEOUT);
   const combined = AbortSignal.any([input.signal, deadline]);
+  const host = input.endpoint.host ?? '127.0.0.1';
+  const urlHost = host.includes(':') && !host.startsWith('[') ? `[${host}]` : host;
+  const connectHost = host.startsWith('[') && host.endsWith(']') ? host.slice(1, -1) : host;
   let path: string;
   try {
-    const url = new URL(input.endpoint.authenticatedUrl(`http://127.0.0.1:${input.endpoint.port}/`));
+    const url = new URL(input.endpoint.authenticatedUrl(`http://${urlHost}:${input.endpoint.port}/`));
     const token = url.searchParams.get('token');
     if (token === null) return Promise.resolve({ kind: 'failure', code: 'factory' });
     path = `/?token=${encodeURIComponent(token)}`;
@@ -66,7 +70,7 @@ export function exchange(input: ExchangeInput): Promise<ExchangeResult> {
       }
     };
     const request = openExchange({
-      host: '127.0.0.1',
+      host: connectHost,
       port: input.endpoint.port,
       method: 'GET',
       path,

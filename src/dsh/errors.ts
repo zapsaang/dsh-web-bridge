@@ -9,7 +9,7 @@ export class BridgeNotImplementedError extends Error {
 export class BridgeLoopbackGuardError extends Error {
   readonly code = 'ERR_BRIDGE_LOOPBACK_GUARD';
   constructor() {
-    super('dsh web bridge requires the dsh web server bound to 127.0.0.1 with a valid bound port.');
+    super('dsh web bridge requires the dsh web server bound to a loopback address with a valid bound port.');
     this.name = 'BridgeLoopbackGuardError';
   }
 }

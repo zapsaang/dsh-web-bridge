@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import {
   AuthorityError, canonicalAuthority, isAuthorityTrusted, isBindAddressAuthority,
-  isCanonicalAuthority, matchesAnyAuthority, normalizeAuthorities, parseAuthority,
+  isCanonicalAuthority, isLoopbackHost, matchesAnyAuthority, normalizeAuthorities, parseAuthority,
 } from '../../src/lib/authority.js';
 
 function parsed(text: string): NonNullable<ReturnType<typeof parseAuthority>> {
@@ -139,4 +139,25 @@ test('T-U12 normalizes entries to canonical strings and permits duplicates', () 
   assert.throws(() => normalizeAuthorities(['bücher.example']),
     (error: unknown) => error instanceof AuthorityError && /WHATWG/.test(error.message));
   assert.throws(() => normalizeAuthorities(['']), (error: unknown) => error instanceof AuthorityError);
+});
+
+test('T-U12 isLoopbackHost validates IPv4/IPv6 loopback addresses and rejects others', () => {
+  assert.equal(isLoopbackHost('127.0.0.1'), true);
+  assert.equal(isLoopbackHost('127.0.0.2'), true);
+  assert.equal(isLoopbackHost('127.255.255.254'), true);
+  assert.equal(isLoopbackHost('localhost'), true);
+  assert.equal(isLoopbackHost('::1'), true);
+  assert.equal(isLoopbackHost('[::1]'), true);
+  assert.equal(isLoopbackHost('0:0:0:0:0:0:0:1'), true);
+  assert.equal(isLoopbackHost('[0:0:0:0:0:0:0:1]'), true);
+  assert.equal(isLoopbackHost('::ffff:127.0.0.1'), true);
+
+  assert.equal(isLoopbackHost('0.0.0.0'), false);
+  assert.equal(isLoopbackHost('::'), false);
+  assert.equal(isLoopbackHost('[::]'), false);
+  assert.equal(isLoopbackHost('192.168.1.1'), false);
+  assert.equal(isLoopbackHost('2001:db8::1'), false);
+  assert.equal(isLoopbackHost('example.com'), false);
+  assert.equal(isLoopbackHost('127.0.0.1.evil.com'), false);
+  assert.equal(isLoopbackHost(''), false);
 });

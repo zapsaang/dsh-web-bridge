@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import { chmod, chown, lstat, mkdir, symlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -50,7 +51,7 @@ async function expectDirectoryRejection(socketPath: string): Promise<void> {
   assert.fail('group-mode acquisition unexpectedly succeeded');
 }
 
-for (const mode of [0o2710, 0o2750]) {
+for (const mode of [0o2710, 0o2750, 0o2770]) {
   test(`2: group parent with exact setgid mode ${mode.toString(8)} is accepted`, async (t) => {
     // Given
     const fixture = await groupParent(t, mode);
@@ -64,10 +65,26 @@ for (const mode of [0o2710, 0o2750]) {
   });
 }
 
+test('2: group parent with standard 0770 mode and primary GID is accepted', async (t) => {
+  // Given: standard non-setgid 0770 directory owned by euid:egid
+  const root = await tempDir();
+  t.after(() => cleanup(root));
+  const dir = join(root, 'shared-0770');
+  await mkdir(dir);
+  await chown(dir, euid, egid);
+  await chmod(dir, 0o770);
+  const socketPath = join(dir, 'bridge.sock');
+  // When
+  const lease = await acquire(socketPath, responder(), new AbortController().signal, defaultIo, 'group');
+  t.after(() => dispose(lease));
+  // Then
+  assert.equal((await requestOverSocket(socketPath)).status, 200);
+});
+
 for (const [label, mode] of [
-  ['missing setgid', 0o710],
-  ['group write', 0o2770],
+  ['other write', 0o2772],
   ['other execute', 0o2711],
+  ['other read/execute', 0o2755],
   ['no group traverse', 0o2700],
   ['strict-style 0700', 0o700],
 ] as const) {
@@ -112,11 +129,56 @@ test('2: group mode still rejects a group-writable ancestor', async (t) => {
   await expectDirectoryRejection(join(dir, 'bridge.sock'));
 });
 
+test('2: group mode accepts an ancestor with sticky bit even when group/other writable', async (t) => {
+  // Given: an ancestor with sticky bit (like /tmp or /run/user/UID)
+  const gid = sharedGid();
+  if (gid === undefined) {
+    t.skip('no supplementary group distinct from EGID; cannot chgrp the group-mode parent fixture');
+    return;
+  }
+  const root = await tempDir();
+  t.after(() => cleanup(root));
+  const stickyAncestor = join(root, 'sticky-ancestor');
+  await mkdir(stickyAncestor);
+  await chmod(stickyAncestor, 0o1777);
+  const dir = join(stickyAncestor, 'shared');
+  await mkdir(dir);
+  await chown(dir, euid, gid);
+  await chmod(dir, 0o2710);
+  // When
+  const lease = await acquire(join(dir, 'bridge.sock'), responder(), new AbortController().signal, defaultIo, 'group');
+  t.after(() => dispose(lease));
+  // Then
+  assert.equal((await requestOverSocket(join(dir, 'bridge.sock'))).status, 200);
+});
+
+test('2: strict mode accepts a parent directory with POSIX ACL mask', async (t) => {
+  const probe = spawnSync('setfacl', ['--version'], { stdio: 'ignore' });
+  if (probe.error || probe.status !== 0) {
+    t.skip('setfacl not available on this platform');
+    return;
+  }
+  const root = await tempDir();
+  t.after(() => cleanup(root));
+  const dir = join(root, 'acl-strict');
+  await mkdir(dir);
+  await chmod(dir, 0o700);
+  const res = spawnSync('setfacl', ['-m', 'u:root:rx', dir]);
+  if (res.status !== 0) {
+    t.skip('filesystem does not support setfacl on temp dir');
+    return;
+  }
+  const socketPath = join(dir, 'bridge.sock');
+  const lease = await acquire(socketPath, responder(), new AbortController().signal, defaultIo, 'strict');
+  t.after(() => dispose(lease));
+  assert.equal((await requestOverSocket(socketPath)).status, 200);
+});
+
 test('2: group predicate does not weaken the strict default path', async (t) => {
-  // Given: a group-shaped directory...
-  const fixture = await groupParent(t, 0o2710);
+  // Given: a group-writable directory...
+  const fixture = await groupParent(t, 0o2770);
   if (!fixture) return;
-  // When / Then: ...is rejected under strict (mode & 077 preserves existing behavior)
+  // When / Then: ...is rejected under strict (group-writable parent fails closed in strict mode)
   await assert.rejects(
     acquire(fixture.socketPath, responder(), new AbortController().signal),
     (error: unknown) => error instanceof LeaseError && error.code === 'ERR_BRIDGE_LEASE_DIRECTORY',

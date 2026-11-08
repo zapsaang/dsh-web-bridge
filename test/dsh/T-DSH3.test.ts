@@ -67,6 +67,36 @@ test('T-DSH3c: loopback host with a valid bound port passes and binds the UDS', 
   await assert.rejects(access(socketPath), /ENOENT/, 'UDS removed after plugin dispose');
 });
 
+test('T-DSH3c-ipv6: IPv6 loopback host ::1 and localhost pass loopback guard and bind the UDS', async (t) => {
+  for (const host of ['::1', '[::1]', 'localhost']) {
+    const dir = await tempDir();
+    t.after(() => cleanup(dir));
+    const socketPath = join(dir, 'bridge.sock');
+    const ctx = await assemble(host, 18778, socketPath);
+    await poll(async () => access(socketPath).then(() => true, () => false));
+    await ctx.fiber.dispose();
+    await assert.rejects(access(socketPath), /ENOENT/);
+  }
+});
+
+test('T-DSH3a-ipv6: non-loopback IPv6 host fails closed without creating a UDS', async (t) => {
+  for (const host of ['::', '2001:db8::1']) {
+    const dir = await tempDir();
+    t.after(() => cleanup(dir));
+    const socketPath = join(dir, 'bridge.sock');
+    const ctx = new Context();
+    t.after(() => ctx.fiber.dispose());
+    ctx.provide('webServer', { host, port: 18779 });
+    ctx.provide('connection', { authenticatedUrl: () => 'http://127.0.0.1/', trustedHosts: [] });
+
+    await assert.rejects(
+      async () => ctx.plugin(bridge, { socketPath, authorities: ['dsh.example.com'] }),
+      (error: unknown) => errorCode(error) === 'ERR_BRIDGE_LOOPBACK_GUARD',
+    );
+    await assert.rejects(access(socketPath), /ENOENT/);
+  }
+});
+
 test('T-DSH3d: the real rc connection trustedHosts satisfies the authority cross-check', async (t) => {
   // Given a real pinned DSH tree whose Connection holds the authority list
   await using app = await isolated();

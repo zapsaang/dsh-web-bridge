@@ -315,8 +315,9 @@ function proxyRequest(
     let headerTimer: NodeJS.Timeout | undefined;
     let exchangeAbort: AbortController | undefined;
 
+    const upstreamHost = (runtime.endpoint.host ?? '127.0.0.1').replace(/^\[|\]$/g, '');
     const upstream = openUpstream({
-      host: '127.0.0.1',
+      host: upstreamHost,
       port: runtime.endpoint.port,
       method: head.method,
       path: stripRetryMarker(head.target),
@@ -592,8 +593,9 @@ function proxyUpgrade(
     if (headerTimer !== undefined) clearTimeout(headerTimer);
   };
 
+  const upstreamHost = (runtime.endpoint.host ?? '127.0.0.1').replace(/^\[|\]$/g, '');
   const upstream = openUpstream({
-    host: '127.0.0.1',
+    host: upstreamHost,
     port: runtime.endpoint.port,
     method: 'GET',
     path: stripRetryMarker(head.target),

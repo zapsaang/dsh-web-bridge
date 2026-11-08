@@ -17,8 +17,9 @@ async function baseAcl(path: string): Promise<void> {
   const acl = spawnSync('getfacl', ['-cp', '--', path], { encoding: 'utf8', timeout: 5000 });
   if (acl.error || acl.status !== 0) throw new LinuxPrerequisiteError('getfacl cannot inspect the isolated fixture path');
   const entries = acl.stdout.split('\n').map(line => line.trim()).filter(Boolean);
-  if (entries.length !== 3 || !entries.every(line => /^(user::|group::|other::)[rwx-]{3}$/.test(line))) {
-    throw new LinuxPrerequisiteError('fixture path has unsupported extended/default ACL entries');
+  const aclPattern = /^(default:)?(user:[^:]*|group:[^:]*|other:|mask:):[rwx-]{3}$/;
+  if (!entries.every(line => aclPattern.test(line))) {
+    throw new LinuxPrerequisiteError('fixture path has malformed or unsupported ACL entries');
   }
 }
 async function prerequisites(): Promise<void> {

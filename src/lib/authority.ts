@@ -137,3 +137,29 @@ function isLoopbackHostname(hostname: string): boolean {
   return parts.length === 4 && parts[0] === '127'
     && parts.every((part) => /^[0-9]{1,3}$/.test(part) && Number(part) <= 255);
 }
+
+/**
+ * Validates whether a host string is a valid loopback address:
+ * - IPv4 loopback (127.0.0.0/8, e.g. 127.0.0.1)
+ * - IPv6 loopback (::1, [::1], 0:0:0:0:0:0:0:1, etc.)
+ * - IPv4-mapped IPv6 loopback (::ffff:127.0.0.1, etc.)
+ * - Hostname `localhost`
+ */
+export function isLoopbackHost(host: string): boolean {
+  if (typeof host !== 'string' || host.length === 0) return false;
+  const unbracketed = host.startsWith('[') && host.endsWith(']') ? host.slice(1, -1) : host;
+  const target = unbracketed.includes(':') ? `[${unbracketed}]` : unbracketed;
+  try {
+    const url = new URL(`http://${target}`);
+    const hostname = url.hostname;
+    if (hostname === 'localhost' || hostname === '[::1]') return true;
+    const parts = hostname.split('.');
+    if (parts.length === 4 && parts[0] === '127') {
+      return parts.every((part) => /^[0-9]{1,3}$/.test(part) && Number(part) <= 255);
+    }
+    if (hostname === '[::ffff:7f00:1]' || hostname.startsWith('[::ffff:127.')) return true;
+    return false;
+  } catch {
+    return false;
+  }
+}

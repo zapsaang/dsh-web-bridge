@@ -18,7 +18,7 @@ export interface Upstream {
 
 export type UpstreamHandler = (request: IncomingMessage, response: ServerResponse, captured: CapturedRequest) => void;
 
-export async function startUpstream(handler: UpstreamHandler): Promise<Upstream> {
+export async function startUpstream(handler: UpstreamHandler, host = '127.0.0.1'): Promise<Upstream> {
   const requests: CapturedRequest[] = [];
   const server = createServer((request, response) => {
     const chunks: Buffer[] = [];
@@ -34,7 +34,7 @@ export async function startUpstream(handler: UpstreamHandler): Promise<Upstream>
       handler(request, response, captured);
     });
   });
-  server.listen(0, '127.0.0.1');
+  server.listen(0, host);
   await once(server, 'listening');
   const port = (server.address() as AddressInfo).port;
   return {
@@ -47,9 +47,10 @@ export async function startUpstream(handler: UpstreamHandler): Promise<Upstream>
   };
 }
 
-export function makeRuntime(upstreamPort: number, overrides?: Partial<BridgeRuntime>): BridgeRuntime {
+export function makeRuntime(upstreamPort: number, overrides?: Partial<BridgeRuntime>, host?: string): BridgeRuntime {
   return {
     endpoint: {
+      host,
       port: upstreamPort,
       authenticatedUrl: () => {
         throw new Error('exchange is out of scope for this test');

@@ -164,4 +164,27 @@ describe('T-H1 full proxy round-trip fidelity', () => {
       await upstream.close();
     }
   });
+
+  test('proxies requests seamlessly to IPv6 loopback upstream (::1)', async () => {
+    // Given an upstream listening on IPv6 loopback ::1
+    const upstream = await startUpstream((request, response) => {
+      response.writeHead(200, { 'content-type': 'text/plain' });
+      response.end('hello-ipv6');
+    }, '::1');
+    const bridge = await startBridge(makeRuntime(upstream.port, undefined, '::1'));
+    try {
+      const response = await callBridge(bridge.port, {
+        method: 'GET',
+        path: '/test/ipv6',
+        headers: { host: 'dsh.example.com' },
+      });
+      assert.equal(response.status, 200);
+      assert.equal(response.body.toString('utf8'), 'hello-ipv6');
+      assert.equal(upstream.requests.length, 1);
+      assert.equal(upstream.requests[0]?.path, '/test/ipv6');
+    } finally {
+      await bridge.close();
+      await upstream.close();
+    }
+  });
 });

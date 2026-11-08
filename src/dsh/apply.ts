@@ -3,7 +3,7 @@ import type { IncomingMessage, Server, ServerResponse } from 'node:http';
 import type { Config } from './index.js';
 import { BridgeAuthorityTrustError, BridgeLoopbackGuardError, BridgeNotImplementedError } from './errors.js';
 import { acquire, cancelled, type LeaseIo, type SocketLease } from '../lib/socket.js';
-import { isAuthorityTrusted, parseAuthority } from '../lib/authority.js';
+import { isAuthorityTrusted, isLoopbackHost, parseAuthority } from '../lib/authority.js';
 import { handleCheckContinue, handleRequest, handleUpgrade, redactLogContext, type BridgeRuntime } from '../lib/bridge.js';
 
 export interface BridgeLogger {
@@ -56,7 +56,8 @@ function webServerBinding(ctx: Context): { readonly host: string; readonly port:
     throw new BridgeLoopbackGuardError();
   }
   const { host, port } = value;
-  if (host !== '127.0.0.1' || typeof port !== 'number' || !Number.isInteger(port) || port < 1 || port > 65535) {
+  if (typeof host !== 'string' || !isLoopbackHost(host) || typeof port !== 'number'
+    || !Number.isInteger(port) || port < 1 || port > 65535) {
     throw new BridgeLoopbackGuardError();
   }
   return { host, port };
@@ -94,7 +95,7 @@ export function makeApply(dependencies: {
     });
     ctx.effect(() => cleanup);
     const runtime: BridgeRuntime = {
-      endpoint: { port: binding.port, authenticatedUrl: connectionUrlFactory(ctx) },
+      endpoint: { host: binding.host, port: binding.port, authenticatedUrl: connectionUrlFactory(ctx) },
       authorities: config.authorities,
       signal: controller.signal,
     };
