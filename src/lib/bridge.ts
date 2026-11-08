@@ -27,10 +27,6 @@ export interface RejectionResponse {
   readonly body: string;
 }
 
-export function validateAuthorities(authorities: readonly string[]): boolean {
-  return authorities.length > 0 && authorities.every(isCanonicalAuthority);
-}
-
 export function isOriginFormTarget(target: string): boolean {
   return target.startsWith('/') && !target.startsWith('//') && !/[#\\]/.test(target) &&
     ![...target].some(character => character.charCodeAt(0) <= 32 || character.charCodeAt(0) === 127);

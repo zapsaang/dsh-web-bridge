@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { classifyRequest, createRejectionResponse, isCanonicalAuthority, isOriginFormTarget, validateAuthorities } from '../../src/lib/bridge.js';
+import { classifyRequest, createRejectionResponse, isCanonicalAuthority, isOriginFormTarget } from '../../src/lib/bridge.js';
 
 // The authority rule is DSH's `assertTrustedAuthority` rule: an entry must
 // survive WHATWG parsing unchanged, case aside. Nothing stricter is added here,
@@ -23,15 +23,6 @@ for (const authority of ['', 'example.com:080', 'example.com:', 'example.com:655
   test(`T-U6 rejects noncanonical authority ${JSON.stringify(authority)}`, () => {
     // Given / When / Then
     assert.equal(isCanonicalAuthority(authority), false);
-  });
-}
-for (const [authorities, expected] of [
-  [[], false], [['example.com'], true], [['Example.com'], true],
-  [['*.example.com'], true], [['bücher.example'], false],
-] as const) {
-  test(`T-U6 validates finite authority list ${JSON.stringify(authorities)}`, () => {
-    // Given / When / Then
-    assert.equal(validateAuthorities(authorities), expected);
   });
 }
 for (const target of ['/', '/api?q=%2F', '/?x=1']) {
