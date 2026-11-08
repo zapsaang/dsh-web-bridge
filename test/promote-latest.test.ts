@@ -22,6 +22,7 @@ interface Registry {
 interface RegistryOptions {
   readonly publishedVersion?: string;
   readonly promoteMarker?: string;
+  readonly versionVisibleAfter?: number;
 }
 
 const startRegistry = async (
@@ -30,6 +31,7 @@ const startRegistry = async (
   options: RegistryOptions = {},
 ): Promise<Registry> => {
   const requests: string[] = [];
+  let versionRequests = 0;
   const server = createServer((request, response) => {
     requests.push(`${request.method ?? ''} ${request.url ?? ''}`);
     const url = request.url ?? '';
@@ -50,6 +52,12 @@ const startRegistry = async (
     }
     if (request.method === 'GET' && options.publishedVersion !== undefined
       && url.endsWith(`/${options.publishedVersion}`)) {
+      versionRequests += 1;
+      if (versionRequests <= (options.versionVisibleAfter ?? 0)) {
+        response.writeHead(404);
+        response.end();
+        return;
+      }
       response.writeHead(200, { 'content-type': 'application/json', connection: 'close' });
       response.end('{}');
       return;
@@ -265,6 +273,50 @@ test('promote-latest moves latest through npm and re-reads the registry', async 
   assert.match(readFileSync(argsFile, 'utf8'),
     /dist-tag add @zapsaang\/dsh-web-bridge@0\.1\.0-alpha\.6 latest --registry http:\/\/127\.0\.0\.1:\d+/);
   assert.ok(registry.requests.some((request) => request.endsWith('/0.1.0-alpha.6')));
+});
+
+test('promote-latest waits for npm to expose the freshly published version', async (t) => {
+  const state = mkdtempSync(join(tmpdir(), 'promote-latest-state-'));
+  t.after(() => rmSync(state, { recursive: true, force: true }));
+  const argsFile = join(state, 'npm-args.txt');
+  const marker = join(state, 'promoted');
+  // npm reports success before the version document is readable; the first two
+  // reads are 404, so the promote job must poll instead of asserting once.
+  const registry = await withRegistry(t, { latest: '0.1.0-alpha.5', alpha: '0.1.0-alpha.5' }, 200, {
+    publishedVersion: '0.1.0-alpha.6', versionVisibleAfter: 2, promoteMarker: marker,
+  });
+  const bin = writeFakeNpm(t, '11.21.1', { argsFile, marker });
+  const manifest = writeManifest(t, '0.1.0-alpha.6');
+  const result = await run(['--registry', registry.url, manifest], {
+    EXPECTED_VERSION: '0.1.0-alpha.6',
+    PATH: `${bin}:${process.env['PATH'] ?? ''}`,
+    PROMOTE_LATEST_PUBLISH_ATTEMPTS: '5',
+    PROMOTE_LATEST_PUBLISH_DELAY_MS: '10',
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /not visible yet \(attempt 1\/5\)/);
+  assert.match(result.stdout, /published version visible after 3 attempt/);
+  assert.match(result.stdout, /moved latest to 0\.1\.0-alpha\.6/);
+});
+
+test('promote-latest fails closed when npm never exposes the published version', async (t) => {
+  const state = mkdtempSync(join(tmpdir(), 'promote-latest-state-'));
+  t.after(() => rmSync(state, { recursive: true, force: true }));
+  const argsFile = join(state, 'npm-args.txt');
+  const registry = await withRegistry(t, { latest: '0.1.0-alpha.5', alpha: '0.1.0-alpha.5' }, 200, {
+    publishedVersion: '0.1.0-alpha.6', versionVisibleAfter: 99,
+  });
+  const bin = writeFakeNpm(t, '11.21.1', { argsFile });
+  const manifest = writeManifest(t, '0.1.0-alpha.6');
+  const result = await run(['--registry', registry.url, manifest], {
+    EXPECTED_VERSION: '0.1.0-alpha.6',
+    PATH: `${bin}:${process.env['PATH'] ?? ''}`,
+    PROMOTE_LATEST_PUBLISH_ATTEMPTS: '3',
+    PROMOTE_LATEST_PUBLISH_DELAY_MS: '10',
+  });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /is not published on .* after 3 attempt/);
+  assert.doesNotMatch(readFileSync(argsFile, 'utf8'), /dist-tag add/);
 });
 
 test('promote-latest refuses to move latest with an npm that lacks OIDC dist-tags', async (t) => {

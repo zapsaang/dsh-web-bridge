@@ -15,7 +15,9 @@ import { resolve } from 'node:path';
  * deliberate no-op: moving `latest` across channels stays a maintainer action.
  *
  * Usage: node scripts/promote-latest.mjs [--dry-run] [--registry URL] [MANIFEST]
- * Environment: EXPECTED_VERSION (required), GITHUB_STEP_SUMMARY (optional)
+ * Environment: EXPECTED_VERSION (required), GITHUB_STEP_SUMMARY (optional),
+ * PROMOTE_LATEST_PUBLISH_ATTEMPTS / PROMOTE_LATEST_PUBLISH_DELAY_MS (optional;
+ * bounded wait for npm to expose the freshly published version).
  */
 
 const PACKAGE_NAME = '@zapsaang/dsh-web-bridge';
@@ -23,6 +25,11 @@ const DEFAULT_REGISTRY = 'https://registry.npmjs.org/';
 const VERSION_PATTERN = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-(alpha|rc)\.(0|[1-9]\d*))?$/;
 const DIST_TAG_HINT = 'enable "Allow npm dist-tag" for the publish.yml trusted publisher of '
   + `${PACKAGE_NAME} (npmjs.com -> package settings -> Trusted publishing)`;
+// npm answers the publish request before the version is readable from the
+// registry ("being processed and may take a few minutes to become available").
+// The promote job therefore waits for visibility instead of asserting once.
+const DEFAULT_PUBLISH_ATTEMPTS = 36;
+const DEFAULT_PUBLISH_DELAY_MS = 5000;
 
 const sleep = (milliseconds) => new Promise((done) => setTimeout(done, milliseconds));
 
@@ -92,6 +99,29 @@ const requestJson = async (url, { allowNotFound = false } = {}) => {
     }
   }
   throw lastError;
+};
+
+const environmentInteger = (name, fallback, minimum) => {
+  const raw = process.env[name];
+  if (raw === undefined) return fallback;
+  assert.match(raw, /^(0|[1-9]\d*)$/, `${name} must be a non-negative integer`);
+  const value = Number(raw);
+  assert.ok(value >= minimum, `${name} must be >= ${minimum}`);
+  return value;
+};
+
+// npm accepts the publish request before the version is readable from the
+// registry, so poll the version document instead of asserting immediately.
+const awaitPublishedVersion = async (url, version, attempts, delayMs) => {
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    const published = await requestJson(url, { allowNotFound: true });
+    if (published !== null) return attempt;
+    if (attempt < attempts) {
+      console.log(`promote-latest: version ${version} not visible yet (attempt ${attempt}/${attempts}); retrying in ${delayMs}ms`);
+      await sleep(delayMs);
+    }
+  }
+  return null;
 };
 
 const assertNpmSupportsDistTagOverOidc = () => {
@@ -192,8 +222,13 @@ const main = async () => {
 
   assertNpmSupportsDistTagOverOidc();
 
-  const published = await requestJson(`${baseUrl}/${escapedName}/${expectedVersion}`, { allowNotFound: true });
-  assert.ok(published !== null, `version ${expectedVersion} is not published on ${registry}`);
+  const attempts = environmentInteger('PROMOTE_LATEST_PUBLISH_ATTEMPTS', DEFAULT_PUBLISH_ATTEMPTS, 1);
+  const delayMs = environmentInteger('PROMOTE_LATEST_PUBLISH_DELAY_MS', DEFAULT_PUBLISH_DELAY_MS, 0);
+  const visibleAfter = await awaitPublishedVersion(
+    `${baseUrl}/${escapedName}/${expectedVersion}`, expectedVersion, attempts, delayMs);
+  assert.ok(visibleAfter !== null,
+    `version ${expectedVersion} is not published on ${registry} after ${attempts} attempt(s)`);
+  console.log(`promote-latest: published version visible after ${visibleAfter} attempt(s)`);
 
   const add = spawnSync('npm',
     ['dist-tag', 'add', `${PACKAGE_NAME}@${expectedVersion}`, 'latest', '--registry', registry],
