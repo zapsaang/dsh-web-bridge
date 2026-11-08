@@ -4,7 +4,11 @@ import type { Config } from './index.js';
 import { BridgeAuthorityTrustError, BridgeLoopbackGuardError, BridgeNotImplementedError } from './errors.js';
 import { acquire, cancelled, type LeaseIo, type SocketLease } from '../lib/socket.js';
 import { isAuthorityTrusted, parseAuthority } from '../lib/authority.js';
-import { handleCheckContinue, handleRequest, handleUpgrade, type BridgeRuntime } from '../lib/bridge.js';
+import { handleCheckContinue, handleRequest, handleUpgrade, redactLogContext, type BridgeRuntime } from '../lib/bridge.js';
+
+export interface BridgeLogger {
+  readonly error: (message: string, context?: unknown) => void;
+}
 
 // As of dsh 0.2.1-rc.2 the web-runtime row no longer owns trustedHosts: the
 // connection row is the one that applies the Host/Origin fence and holds the
@@ -61,7 +65,14 @@ function webServerBinding(ctx: Context): { readonly host: string; readonly port:
 export function makeApply(dependencies: {
   readonly io: LeaseIo;
   readonly createServer: () => Server;
+  readonly logger?: BridgeLogger;
 }): (ctx: Context, config: Config) => Promise<() => Promise<void>> {
+  const logger: BridgeLogger = dependencies.logger ?? {
+    error: (message: string, context?: unknown): void => {
+      if (context !== undefined) console.error(message, context);
+      else console.error(message);
+    },
+  };
   return async (ctx, config) => {
     const binding = webServerBinding(ctx);
     assertAuthorityTrust(ctx, config.authorities, binding.host);
@@ -91,22 +102,41 @@ export function makeApply(dependencies: {
       request.destroy();
       response.destroy();
     };
+    const logError = (event: 'request' | 'checkContinue' | 'checkExpectation' | 'upgrade', error: unknown): void => {
+      const redacted = redactLogContext(error);
+      logger.error(`[dsh-web-bridge] Top-level ${event} handler failed: ${redacted}`, {
+        event,
+        error: redacted,
+      });
+    };
     server.on('request', (request: IncomingMessage, response: ServerResponse) => {
       if (!ready) { request.socket.destroy(); return; }
-      void handleRequest(request, response, runtime).catch(() => destroy(request, response));
+      void handleRequest(request, response, runtime).catch((error) => {
+        logError('request', error);
+        destroy(request, response);
+      });
     });
     server.on('checkContinue', (request: IncomingMessage, response: ServerResponse) => {
       if (!ready) { request.socket.destroy(); return; }
-      void handleCheckContinue(request, response, runtime).catch(() => destroy(request, response));
+      void handleCheckContinue(request, response, runtime).catch((error) => {
+        logError('checkContinue', error);
+        destroy(request, response);
+      });
     });
     server.on('checkExpectation', (request: IncomingMessage, response: ServerResponse) => {
       if (!ready) { request.socket.destroy(); return; }
-      void handleRequest(request, response, runtime).catch(() => destroy(request, response));
+      void handleRequest(request, response, runtime).catch((error) => {
+        logError('checkExpectation', error);
+        destroy(request, response);
+      });
     });
     server.on('upgrade', (request: IncomingMessage, socket, head: Buffer) => {
       if (!ready) { socket.destroy(); return; }
       try { handleUpgrade(request, socket, head, runtime); }
-      catch { socket.destroy(); }
+      catch (error) {
+        logError('upgrade', error);
+        socket.destroy();
+      }
     });
     lease = await acquire(config.socketPath, server, controller.signal, dependencies.io, config.socketAccess);
     if (controller.signal.aborted || ctx.fiber.uid === null) {

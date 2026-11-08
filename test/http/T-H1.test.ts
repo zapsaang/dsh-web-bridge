@@ -138,4 +138,30 @@ describe('T-H1 full proxy round-trip fidelity', () => {
       await upstream.close();
     }
   });
+
+  test('proxied request appends RFC 9110 compliant Via header upstream', async () => {
+    // Given an upstream that captures request headers
+    const upstream = await startUpstream((_request, response) => response.end('ok'));
+    const bridge = await startBridge(makeRuntime(upstream.port));
+    try {
+      // When a request without Via arrives
+      await callBridge(bridge.port, {
+        headers: { host: 'dsh.example.com' },
+      });
+      // Then upstream observes the mandatory Via: 1.1 dsh-web-bridge header
+      assert.equal(upstream.requests.length, 1);
+      assert.equal(headerValue(upstream.requests[0]?.rawHeaders ?? [], 'via'), '1.1 dsh-web-bridge');
+
+      // When a request with an existing Via arrives
+      await callBridge(bridge.port, {
+        headers: { host: 'dsh.example.com', via: '1.0 test-gateway' },
+      });
+      // Then upstream observes the appended Via header list
+      assert.equal(upstream.requests.length, 2);
+      assert.equal(headerValue(upstream.requests[1]?.rawHeaders ?? [], 'via'), '1.0 test-gateway, 1.1 dsh-web-bridge');
+    } finally {
+      await bridge.close();
+      await upstream.close();
+    }
+  });
 });

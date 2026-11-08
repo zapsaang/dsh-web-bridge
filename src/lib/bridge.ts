@@ -165,7 +165,16 @@ export function createRejectionResponse(statusCode: 400 | 403): RejectionRespons
 }
 
 /** Untrusted URL/header/error context is never suitable for diagnostic output. */
-export function redactLogContext(_context: unknown): string {
+export function redactLogContext(context: unknown): string {
+  if (context instanceof Error) {
+    const code = 'code' in context && typeof context.code === 'string' && /^[A-Z0-9_]+$/.test(context.code)
+      ? context.code
+      : undefined;
+    const name = /^[A-Za-z0-9_]+$/.test(context.name) && !/(?:token|cookie|jwt|cf-access)/i.test(context.name)
+      ? context.name
+      : 'Error';
+    return code ? `[${name}: ${code}]` : `[${name}]`;
+  }
   return '[redacted]';
 }
 
@@ -252,6 +261,25 @@ function removeHeader(headers: RawHeaders, name: string): RawHeaders {
   return result;
 }
 
+/** Append RFC 9110 Section 7.6.3 compliant Via header to forwarded requests. */
+export function appendVia(headers: RawHeaders): RawHeaders {
+  const existing = rawHeaderValues(headers, 'via');
+  const withoutVia = removeHeader(headers, 'via');
+  const value = existing.length > 0
+    ? `${existing.join(', ')}, 1.1 dsh-web-bridge`
+    : '1.1 dsh-web-bridge';
+  return [...withoutVia, 'Via', value];
+}
+
+/** RFC 9110 §8.6 / RFC 9112 §6.1: validate whether upstream response has a known, valid Content-Length. */
+export function hasKnownValidContentLength(headers: RawHeaders, status: number): boolean {
+  if ((status >= 100 && status < 200) || status === 204) return false;
+  if (rawHeaderValues(headers, 'transfer-encoding').length > 0) return false;
+  const lengths = rawHeaderValues(headers, 'content-length');
+  if (lengths.length !== 1 || lengths[0] === undefined) return false;
+  return /^[0-9]+$/.test(lengths[0]);
+}
+
 function proxyRequest(
   request: IncomingMessage,
   response: ServerResponse,
@@ -260,9 +288,9 @@ function proxyRequest(
 ): Promise<void> {
   return new Promise((resolve) => {
     const timeouts: BridgeTimeouts = { ...DEFAULT_TIMEOUTS, ...runtime.timeouts };
-    const outbound = removeHeader(filterHopByHopHeaders(
+    const outbound = appendVia(removeHeader(filterHopByHopHeaders(
       stripRequestAuthorization(stripSensitiveProxyHeaders(head.rawHeaders)),
-    ), 'expect');
+    ), 'expect'));
     const timers = new Set<NodeJS.Timeout>();
     const arm = (milliseconds: number, fire: () => void): NodeJS.Timeout => {
       const timer = setTimeout(() => {
@@ -551,9 +579,9 @@ function proxyUpgrade(
   const requestedExtensions = splitTokens(rawHeaderValues(head.rawHeaders, 'sec-websocket-extensions'))
     .map((extension) => extension.split(';')[0]?.trim() ?? '');
 
-  const outbound: string[] = [...removeHeader(filterHopByHopHeaders(
+  const outbound: string[] = [...appendVia(removeHeader(filterHopByHopHeaders(
     stripRequestAuthorization(stripSensitiveProxyHeaders(head.rawHeaders)),
-  ), 'expect')];
+  ), 'expect'))];
   outbound.push('Connection', 'Upgrade', 'Upgrade', 'websocket');
 
   let committed = false;
@@ -643,7 +671,9 @@ function proxyUpgrade(
     committed = true;
     const status = upRes.statusCode ?? 502;
     let headers = applyEnsureSecure(stripSensitiveProxyHeaders(filterHopByHopHeaders(upRes.rawHeaders)));
-    headers = removeHeader(headers, 'content-length');
+    if (!hasKnownValidContentLength(upRes.rawHeaders, status)) {
+      headers = removeHeader(headers, 'content-length');
+    }
     const lines = [`HTTP/1.1 ${status} ${upRes.statusMessage ?? ''}`];
     for (let index = 0; index < headers.length; index += 2) {
       lines.push(`${headers[index]}: ${headers[index + 1]}`);

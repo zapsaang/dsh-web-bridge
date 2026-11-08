@@ -21,3 +21,9 @@ for (const [index, context] of contexts.entries()) {
     assert.ok(output.length > 0);
   });
 }
+
+test('T-U9 extracts safe error name and code while omitting message and stack', () => {
+  const err = Object.assign(new Error('sensitive message https://example.com/?token=secret'), { code: 'ECONNRESET' });
+  const output = redactLogContext(err);
+  assert.equal(output, '[Error: ECONNRESET]');
+});

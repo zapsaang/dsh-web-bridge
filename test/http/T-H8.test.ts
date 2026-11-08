@@ -288,4 +288,47 @@ describe('T-H8 WebSocket stub matrix (no fabricated DSH route)', () => {
       }
     }
   });
+
+  test('upgrade request appends RFC 9110 compliant Via header upstream', async () => {
+    // Given an upstream that echoes a 101
+    const upstream = await startRawUpstream((socket, _head, reply) => {
+      reply(`HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n`
+        + `Sec-WebSocket-Accept: ${acceptFor(KEY)}\r\n\r\n`);
+    });
+    const bridge = await startBridge(makeRuntime(upstream.port));
+    try {
+      // When the handshake is forwarded through the bridge
+      await rawWsRoundTrip(bridge.port, handshakeRequest());
+      // Then upstream received the Via header
+      const requestText = upstream.requests[0]?.toString('latin1') ?? '';
+      assert.match(requestText, /\r\nVia: 1\.1 dsh-web-bridge\r\n/i);
+    } finally {
+      await bridge.close();
+      await upstream.close();
+    }
+  });
+
+  test('non-101 upstream response preserves valid Content-Length for fixed-size bodies', async () => {
+    // Given an upstream returning a 403 response with explicit Content-Length
+    const bodyText = 'Forbidden by upstream policy';
+    const upstream = await startRawUpstream((socket, _head, reply) => {
+      reply(`HTTP/1.1 403 Forbidden\r\nContent-Type: text/plain\r\nContent-Length: ${bodyText.length}\r\n\r\n${bodyText}`);
+      setTimeout(() => socket.destroy(), 200);
+    });
+    const bridge = await startBridge(makeRuntime(upstream.port));
+    try {
+      // When the client attempts upgrade
+      const raw = await rawWsRoundTrip(bridge.port, handshakeRequest(), 500);
+      const text = raw.toString('latin1');
+      // Then the downgraded response preserves Content-Length and provides full body
+      assert.match(text, /^HTTP\/1\.1 403 Forbidden/);
+      assert.match(text, new RegExp(`\\r\\nContent-Length: ${bodyText.length}\\r\\n`, 'i'));
+      assert.match(text, /\r\nConnection: close\r\n/i);
+      const body = text.slice(text.indexOf('\r\n\r\n') + 4);
+      assert.equal(body, bodyText);
+    } finally {
+      await bridge.close();
+      await upstream.close();
+    }
+  });
 });
