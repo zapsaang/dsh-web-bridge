@@ -178,7 +178,22 @@ function checkOptionalNginxSyntax() {
     writeFileSync(fragmentPath, conf);
 
     const rootConfPath = join(dir, 'nginx.conf');
-    writeFileSync(rootConfPath, `events { worker_connections 1024; }\nhttp {\n    include ${fragmentPath};\n}\n`);
+    const pidPath = join(dir, 'nginx.pid');
+    const errorLogPath = join(dir, 'error.log');
+    writeFileSync(rootConfPath, [
+      `pid ${pidPath};`,
+      `error_log ${errorLogPath};`,
+      'events { worker_connections 1024; }',
+      'http {',
+      `    client_body_temp_path ${join(dir, 'client_body')};`,
+      `    proxy_temp_path ${join(dir, 'proxy')};`,
+      `    fastcgi_temp_path ${join(dir, 'fastcgi')};`,
+      `    uwsgi_temp_path ${join(dir, 'uwsgi')};`,
+      `    scgi_temp_path ${join(dir, 'scgi')};`,
+      `    include ${fragmentPath};`,
+      '}',
+      '',
+    ].join('\n'));
 
     const result = spawnSync('nginx', ['-t', '-c', rootConfPath], { encoding: 'utf8' });
     requireCondition(result.status === 0, `nginx syntax validation failed: ${result.stderr || result.stdout}`);
