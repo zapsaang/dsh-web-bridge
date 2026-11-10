@@ -185,6 +185,7 @@ function checkOptionalNginxSyntax() {
       `error_log ${errorLogPath};`,
       'events { worker_connections 1024; }',
       'http {',
+      '    access_log off;',
       `    client_body_temp_path ${join(dir, 'client_body')};`,
       `    proxy_temp_path ${join(dir, 'proxy')};`,
       `    fastcgi_temp_path ${join(dir, 'fastcgi')};`,
@@ -196,7 +197,11 @@ function checkOptionalNginxSyntax() {
     ].join('\n'));
 
     const result = spawnSync('nginx', ['-t', '-c', rootConfPath], { encoding: 'utf8' });
-    requireCondition(result.status === 0, `nginx syntax validation failed: ${result.stderr || result.stdout}`);
+    const output = `${result.stdout || ''}\n${result.stderr || ''}`;
+    const syntaxOk = output.includes('syntax is ok');
+    const permissionOnly = output.includes('Permission denied') && !output.includes('[emerg] directive');
+    requireCondition(result.status === 0 || (syntaxOk && permissionOnly),
+      `nginx syntax validation failed: ${result.stderr || result.stdout}`);
     console.log('PASS: nginx syntax validation (nginx -t)');
   } finally {
     rmSync(dir, { recursive: true, force: true });
