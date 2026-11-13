@@ -189,23 +189,46 @@ test('promote-latest never moves latest backwards inside a channel', async (t) =
   assert.match(result.stdout, /action=skip reason=not-newer\b/);
 });
 
-const mismatches = [
-  { name: 'alpha latest, new rc', latest: '0.1.0-alpha.5', version: '0.1.0-rc.1' },
+const crossChannelPromotions = [
+  { name: 'alpha latest, new rc', latest: '0.1.0-alpha.7', version: '0.1.0-rc.2' },
   { name: 'alpha latest, new stable', latest: '0.1.0-alpha.5', version: '0.1.0' },
-  { name: 'rc latest, new alpha', latest: '0.1.0-rc.2', version: '0.1.0-alpha.6' },
   { name: 'rc latest, new stable', latest: '0.1.0-rc.2', version: '0.1.0' },
-  { name: 'stable latest, new alpha', latest: '0.1.0', version: '0.1.1-alpha.1' },
 ] as const;
 
-for (const fixture of mismatches) {
-  test(`promote-latest skips across channels: ${fixture.name}`, async (t) => {
+for (const fixture of crossChannelPromotions) {
+  test(`promote-latest promotes one-way across channels: ${fixture.name}`, async (t) => {
     const registry = await withRegistry(t, { latest: fixture.latest });
     const manifest = writeManifest(t, fixture.version);
     const result = await dryRun(manifest, registry, fixture.version);
     assert.equal(result.status, 0, result.stderr);
-    assert.match(result.stdout, /action=skip reason=channel-mismatch\b/);
+    assert.match(result.stdout, /action=move\b/);
   });
 }
+
+const channelDowngrades = [
+  { name: 'rc latest, new alpha', latest: '0.1.0-rc.2', version: '0.1.0-alpha.6' },
+  { name: 'rc latest, newer minor alpha', latest: '0.1.0-rc.2', version: '0.2.0-alpha.1' },
+  { name: 'stable latest, new alpha', latest: '0.1.0', version: '0.1.1-alpha.1' },
+  { name: 'stable latest, new rc', latest: '0.1.0', version: '0.2.0-rc.1' },
+] as const;
+
+for (const fixture of channelDowngrades) {
+  test(`promote-latest skips channel downgrades: ${fixture.name}`, async (t) => {
+    const registry = await withRegistry(t, { latest: fixture.latest });
+    const manifest = writeManifest(t, fixture.version);
+    const result = await dryRun(manifest, registry, fixture.version);
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /action=skip reason=channel-downgrade\b/);
+  });
+}
+
+test('promote-latest never moves latest backwards across channels', async (t) => {
+  const registry = await withRegistry(t, { latest: '0.2.0-alpha.5' });
+  const manifest = writeManifest(t, '0.1.0-rc.2');
+  const result = await dryRun(manifest, registry, '0.1.0-rc.2');
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /action=skip reason=not-newer\b/);
+});
 
 test('promote-latest skips when latest does not exist', async (t) => {
   const registry = await withRegistry(t, { alpha: '0.1.0-alpha.6' });

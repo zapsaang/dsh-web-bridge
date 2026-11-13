@@ -46,8 +46,8 @@ Run the formal entry on a privileged Linux runner before packing, not as a skipp
 
 ```sh
 npm pack                                              # real tarball
-tar -tzf ./zapsaang-dsh-web-bridge-0.1.0-rc.2.tgz    # inspect contents
-npm publish ./zapsaang-dsh-web-bridge-0.1.0-rc.2.tgz --dry-run --tag rc --access public --registry https://registry.npmjs.org/
+tar -tzf ./zapsaang-dsh-web-bridge-0.1.0-rc.3.tgz    # inspect contents
+npm publish ./zapsaang-dsh-web-bridge-0.1.0-rc.3.tgz --dry-run --tag rc --access public --registry https://registry.npmjs.org/
 ```
 
 Do not pass `--provenance` locally; provenance comes from CI OIDC only, and a dry run is not proof of authentication or provenance. Per the npm docs, a relative tarball/folder package-spec must begin with an explicit `./` prefix; absolute paths are also accepted.
@@ -79,7 +79,7 @@ Fresh compiled configuration/group checks passed **24/24**, and readiness checks
 
 ## Releasing
 
-Maintainer instructions, not a record of completed actions. The package already exists on the registry — the maintainer bootstrapped it interactively (`0.0.0-stage` placeholder, then `0.1.0-alpha.1`), so releases now go through the tag-triggered workflow below. Published versions are immutable; every fix needs a new version — current 0.1.0-rc.2; rolls up `@deepseek-ai/dsh` `0.2.2-rc.2` baseline synchronization and the `sync-dsh` one-click baseline upgrade gate alongside multi-channel release pipeline generalization, deployment example syntax verification, authority generalization, header boundary enforcement, and HTTP conformance. README changes only reach the npm page if they land before packing/publishing that version.
+Maintainer instructions, not a record of completed actions. The package already exists on the registry — the maintainer bootstrapped it interactively (`0.0.0-stage` placeholder, then `0.1.0-alpha.1`), so releases now go through the tag-triggered workflow below. Published versions are immutable; every fix needs a new version — current 0.1.0-rc.3; rolls up one-way cross-channel `latest` promotion (`alpha -> rc -> stable`) in `promote-latest.mjs`, `@deepseek-ai/dsh` `0.2.2-rc.2` baseline synchronization and `sync-dsh`, alongside multi-channel release pipeline generalization, deployment example syntax verification, authority generalization, header boundary enforcement, and HTTP conformance. README changes only reach the npm page if they land before packing/publishing that version.
 
 The published name is **scoped** (`@zapsaang/dsh-web-bridge`). npm rejects the unscoped `dsh-web-bridge` with a 403 because it is too similar to the existing `dsh-webbridge` package, and that similarity check cannot be appealed — so do not "simplify" the name back to unscoped. The scope is also part of the Cordis load contract: the profile loader resolves the patch row's `name` as a bare module specifier, so `package.json`, `cordis.patch.yml`, and the plugin's exported `name` must always move together. The unscoped name has never been published; the bootstrap created the scoped `@zapsaang/dsh-web-bridge`.
 
@@ -98,21 +98,21 @@ Once the package exists, configure the Trusted Publisher on the `@zapsaang/dsh-w
 
 ### Release workflow (`.github/workflows/publish.yml`)
 
-- Two triggers: pushing a tag named `v<version>` (for example `v0.1.0-rc.2`) publishes automatically, and manual `workflow_dispatch` stays available. Dispatch inputs: `expected_version` (required, must match `package.json`, format `X.Y.Z-(alpha|rc).N`) and `publish` (boolean, default `false`). A tag trigger always publishes; a dispatch publishes only with `publish: true` on `refs/heads/main`.
+- Two triggers: pushing a tag named `v<version>` (for example `v0.1.0-rc.3`) publishes automatically, and manual `workflow_dispatch` stays available. Dispatch inputs: `expected_version` (required, must match `package.json`, format `X.Y.Z-(alpha|rc).N`) and `publish` (boolean, default `false`). A tag trigger always publishes; a dispatch publishes only with `publish: true` on `refs/heads/main`.
 - The tag name is the single source of truth for the version. The version-resolution step strips an optional `v` prefix, exports it as `EXPECTED_VERSION`, and `scripts/check-release.mjs` then requires the ref to be either `refs/heads/main` or a tag naming exactly that version, plus a manifest carrying the same version. Tag-only glob filters (`v*`) are deliberate: Actions branch/tag filters are globs, not regexes, so the strict `X.Y.Z-(alpha|rc).N` check lives in the guard.
 
 ```sh
 git switch main && git pull --ff-only
-git tag -a v0.1.0-rc.2 -m "0.1.0-rc.2"
-git push origin v0.1.0-rc.2
+git tag -a v0.1.0-rc.3 -m "0.1.0-rc.3"
+git push origin v0.1.0-rc.3
 ```
 
 - The tag must point at a commit that is already on `main`: `verify` re-checks ancestry with `git merge-base --is-ancestor` against `origin/main`, which is why its checkout uses `fetch-depth: 0`. It must also contain the workflow file you intend to run — a tag on an older commit runs that commit's workflow revision.
 - Keep the trigger in `publish.yml`. The npm Trusted Publisher is bound to that workflow **filename** (plus its empty environment field), so a second workflow file would require reconfiguring the publisher (and an initial OIDC publish within 2 days of that change). That is also why `promote-latest` is a job in this file rather than its own workflow.
 - Job `verify`: full gates (typecheck/build/default tests plus the explicit compiled DSH and browser suites), project-pinned Chromium install, and the compiled privileged formal Linux A7-A9 matrix via `sudo` with the pinned Node path, then real `npm pack` and tarball inspection, `npm publish <tarball> --dry-run`, uploads the tarball as an artifact. A BLOCKED formal gate stops the job before packing; deployment A10 is separate.
 - Job `publish`: runs when the trigger is a tag, or when a dispatch passes `publish: true` on `main`; permissions `contents: read, id-token: write`; OIDC Trusted Publisher authentication, no `NPM_TOKEN`. Publishes the exact verified tarball artifact (checksum re-verified), never a rebuild.
-- Job `promote-latest`: runs only after `publish` succeeded. It reads the registry's current `latest`, derives the channel of the released version from its version string (`alpha` for `-alpha.N`, `rc` for `-rc.N`, `stable` for no suffix), and runs `npm dist-tag add @zapsaang/dsh-web-bridge@<version> latest` only when the channels match **and** the released version is newer than the current `latest`. Any other state — no `latest`, an unparsable current tag such as `0.0.0-stage`, an equal or older version, or a channel change — is a no-op that exits 0 with the reason in the run summary. It authenticates with OIDC (`contents: read, id-token: write`, no `NPM_TOKEN`) and installs `npm@11.21.1` because Node 24.21.0's npm 11.19.0 cannot manage dist-tags over OIDC; the publish job keeps using the bundled npm. npm normally answers the publish request before the version document is readable ("being processed and may take a few minutes"), so the job polls the version document for up to 36 attempts × 5 s (`PROMOTE_LATEST_PUBLISH_ATTEMPTS` / `PROMOTE_LATEST_PUBLISH_DELAY_MS`) before moving `latest`; a version that never appears still fails closed. The job is idempotent, so if it fails after the publish succeeded, `Re-run failed jobs` re-runs only `promote-latest`.
-- `latest` is channel-local: it never jumps from alpha to rc or stable, or back. Switching channels (for example, letting the first stable release take over) is a deliberate maintainer action with an authenticated CLI, after which CI keeps `latest` on the new channel:
+- Job `promote-latest`: runs only after `publish` succeeded. It reads the registry's current `latest`, derives the channel of the released version from its version string (`alpha` for `-alpha.N`, `rc` for `-rc.N`, `stable` for no suffix), and runs `npm dist-tag add @zapsaang/dsh-web-bridge@<version> latest` when the released version is strictly newer **and** its channel does not regress (`alpha -> rc -> stable` one-way forward promotion is automatic; `rc -> alpha`, `stable -> rc`, or `stable -> alpha` skip with `channel-downgrade`). Any other state — no `latest`, an unparsable current tag such as `0.0.0-stage`, an equal or older version, or a channel downgrade — is a no-op that exits 0 with the reason in the run summary. It authenticates with OIDC (`contents: read, id-token: write`, no `NPM_TOKEN`) and installs `npm@11.21.1` because Node 24.21.0's npm 11.19.0 cannot manage dist-tags over OIDC; the publish job keeps using the bundled npm. npm normally answers the publish request before the version document is readable ("being processed and may take a few minutes"), so the job polls the version document for up to 36 attempts × 5 s (`PROMOTE_LATEST_PUBLISH_ATTEMPTS` / `PROMOTE_LATEST_PUBLISH_DELAY_MS`) before moving `latest`; a version that never appears still fails closed. The job is idempotent, so if it fails after the publish succeeded, `Re-run failed jobs` re-runs only `promote-latest`.
+- `latest` never moves backwards across channels (`stable -> rc/alpha` or `rc -> alpha`); reverting `latest` backwards remains a deliberate manual maintainer action with an authenticated CLI:
 
 ```sh
 npm dist-tag add @zapsaang/dsh-web-bridge@<version> latest
@@ -120,15 +120,15 @@ npm dist-tag add @zapsaang/dsh-web-bridge@<version> latest
 
 - There is no GitHub Environment, so a tag push publishes **unattended** — no approval step, matching the tag-triggered OIDC setup in the other `zapsaang` npm packages. The gates on this path are the deliberate tag push itself, job `verify`, and the release guard's requirement that the tag name equals the reviewed `package.json` version. Restoring a required-reviewer gate means re-adding `environment: npm` here, setting the same environment in the npm Trusted Publisher config, and allowing the `v*` tag pattern under that environment's "Deployment branches and tags" — a `main`-only rule there blocks a tag-triggered job before OIDC runs.
 - Automatic provenance applies only when **both** the GitHub repository and the npm package are public.
-- After an authorized publish, verify separately, e.g. for `0.1.0-rc.2`:
+- After an authorized publish, verify separately, e.g. for `0.1.0-rc.3`:
 
 ```sh
-npm view @zapsaang/dsh-web-bridge@0.1.0-rc.2 version dist.attestations --json
+npm view @zapsaang/dsh-web-bridge@0.1.0-rc.3 version dist.attestations --json
 npm view @zapsaang/dsh-web-bridge dist-tags --json
 ```
 
-  and inspect the version page (https://www.npmjs.com/package/@zapsaang/dsh-web-bridge/v/0.1.0-rc.2) for the provenance indicator. The `promote-latest` job records the current `latest`, the released version, and the move/skip reason in the run summary; `npm view @zapsaang/dsh-web-bridge dist-tags --json` is the registry-side check.
+  and inspect the version page (https://www.npmjs.com/package/@zapsaang/dsh-web-bridge/v/0.1.0-rc.3) for the provenance indicator. The `promote-latest` job records the current `latest`, the released version, and the move/skip reason in the run summary; `npm view @zapsaang/dsh-web-bridge dist-tags --json` is the registry-side check.
 
 ### Installing from npm
 
-Check what actually exists: `npm view @zapsaang/dsh-web-bridge dist-tags --json`. Prefer explicit versions (`@zapsaang/dsh-web-bridge@0.1.0-rc.2`) or `@rc`; on a first publication the tag layout can vary, so inspect the registry rather than assuming `latest` exists or that `alpha` can never point at the newest version. `latest` is moved automatically by CI only inside the channel it already points at; changing channels is a manual maintainer action.
+Check what actually exists: `npm view @zapsaang/dsh-web-bridge dist-tags --json`. Prefer explicit versions (`@zapsaang/dsh-web-bridge@0.1.0-rc.3`) or `@rc`; on a first publication the tag layout can vary, so inspect the registry rather than assuming `latest` exists or that `alpha` can never point at the newest version. `latest` is moved forward automatically by CI within the same channel or one-way along `alpha -> rc -> stable`, and never downgrades channels automatically; moving backwards across channels requires a manual maintainer action.

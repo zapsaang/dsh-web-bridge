@@ -5,14 +5,15 @@ import { appendFileSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 /*
- * Keeps `latest` on the release channel it currently points at.
+ * Moves `latest` forward within the same release channel or along the one-way
+ * promotion path (`alpha` -> `rc` -> `stable`).
  *
- * alpha  -> only a newer alpha moves `latest`
- * rc     -> only a newer rc moves `latest`
- * stable -> only a newer stable moves `latest`
+ * alpha  -> a newer alpha, rc, or stable moves `latest`
+ * rc     -> a newer rc or stable moves `latest`; alpha skips (channel-downgrade)
+ * stable -> a newer stable moves `latest`; alpha and rc skip (channel-downgrade)
  *
- * Any other state (no `latest`, an unknown suffix, a channel change) is a
- * deliberate no-op: moving `latest` across channels stays a maintainer action.
+ * Any other state (no `latest`, an unknown suffix, a channel downgrade, or a
+ * non-newer version) is a deliberate no-op.
  *
  * Usage: node scripts/promote-latest.mjs [--dry-run] [--registry URL] [MANIFEST]
  * Environment: EXPECTED_VERSION (required), GITHUB_STEP_SUMMARY (optional),
@@ -23,6 +24,7 @@ import { resolve } from 'node:path';
 const PACKAGE_NAME = '@zapsaang/dsh-web-bridge';
 const DEFAULT_REGISTRY = 'https://registry.npmjs.org/';
 const VERSION_PATTERN = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-(alpha|rc)\.(0|[1-9]\d*))?$/;
+const CHANNEL_RANK = { alpha: 0, rc: 1, stable: 2 };
 const DIST_TAG_HINT = 'enable "Allow npm dist-tag" for the publish.yml trusted publisher of '
   + `${PACKAGE_NAME} (npmjs.com -> package settings -> Trusted publishing)`;
 // npm answers the publish request before the version is readable from the
@@ -49,6 +51,9 @@ const compareVersions = (left, right) => {
   for (const part of ['major', 'minor', 'patch']) {
     if (left[part] !== right[part]) return left[part] < right[part] ? -1 : 1;
   }
+  const leftRank = CHANNEL_RANK[left.channel];
+  const rightRank = CHANNEL_RANK[right.channel];
+  if (leftRank !== rightRank) return leftRank < rightRank ? -1 : 1;
   if (left.prerelease === right.prerelease) return 0;
   if (left.prerelease === null) return 1;
   if (right.prerelease === null) return -1;
@@ -191,9 +196,9 @@ const main = async () => {
     } else if (current === null) {
       action = 'skip';
       reason = 'unknown-current-channel';
-    } else if (current.channel !== target.channel) {
+    } else if (CHANNEL_RANK[target.channel] < CHANNEL_RANK[current.channel]) {
       action = 'skip';
-      reason = 'channel-mismatch';
+      reason = 'channel-downgrade';
     } else if (compareVersions(target, current) <= 0) {
       action = 'skip';
       reason = 'not-newer';
