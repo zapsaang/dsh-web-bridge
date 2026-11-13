@@ -16,6 +16,7 @@ interface Manifest {
   dsh: { bundle: { patch: string[] } };
   engines: { node: string };
   peerDependencies: Record<string, string>;
+  devDependencies: Record<string, string>;
   dependencies?: Record<string, string>;
   packageManager: string;
 }
@@ -63,14 +64,25 @@ test('T-P4: bundle metadata declares exactly the shipped patch file', () => {
   assert.deepEqual([...json.files].sort(), ['cordis.patch.yml', 'lib'], 'published files are lib + patch only');
 });
 
-test('T-P4: peer dependencies are exactly the pinned rc.1 trio with no runtime deps', () => {
+const EXACT_PEER_VERSION = /^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-(?:alpha|rc)\.(?:0|[1-9]\d*))?$/;
+
+test('T-P4: peer dependencies are an exact pinned trio synchronized with devDependencies and README', () => {
   // Given / When
   const json = manifest();
+  const readme = readFileSync('README.md', 'utf8');
   // Then
-  assert.deepEqual(json.peerDependencies, {
-    '@deepseek-ai/cordis': '4.1.0',
-    '@deepseek-ai/dsh': '0.2.2-rc.1',
-    '@deepseek-ai/schemastery': '3.19.0',
-  });
+  assert.deepEqual(
+    Object.keys(json.peerDependencies).sort(),
+    ['@deepseek-ai/cordis', '@deepseek-ai/dsh', '@deepseek-ai/schemastery'],
+  );
+  for (const name of ['@deepseek-ai/dsh', '@deepseek-ai/cordis', '@deepseek-ai/schemastery'] as const) {
+    const version = json.peerDependencies[name];
+    assert.ok(typeof version === 'string' && EXACT_PEER_VERSION.test(version),
+      `peerDependencies[${name}] must be an exact version, got ${String(version)}`);
+    assert.equal(json.devDependencies[name], version,
+      `devDependencies[${name}] must stay synchronized with peerDependencies`);
+    assert.ok(readme.includes(`| \`${name}\` | \`${version}\` |`),
+      `README.md peer table must declare ${name} ${version}`);
+  }
   assert.ok(!('dependencies' in json), 'runtime comes only from the host-provided peers');
 });

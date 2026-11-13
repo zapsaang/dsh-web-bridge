@@ -1,6 +1,6 @@
 {
   "name": "@zapsaang/dsh-web-bridge",
-  "version": "0.1.0-rc.1",
+  "version": "0.1.0-rc.2",
   "description": "Unix domain socket reverse proxy and automatic native session bootstrap for DeepSeek Harness Web, packaged as a Cordis plugin.",
   "license": "MIT",
   "repository": {
@@ -48,7 +48,7 @@
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "4.1.0",
-    "@deepseek-ai/dsh": "0.2.2-rc.1",
+    "@deepseek-ai/dsh": "0.2.2-rc.2",
     "@deepseek-ai/schemastery": "3.19.0"
   },
   "scripts": {
@@ -56,12 +56,13 @@
     "typecheck": "tsc -p tsconfig.test.json --noEmit",
     "test": "node --input-type=module -e \"import { rmSync } from 'node:fs'; rmSync('.test-dist', { recursive: true, force: true });\" && tsc -p tsconfig.test.json && node --test .test-dist/test/*.test.js",
     "prepack": "npm run build && node scripts/check-pack-files.mjs",
-    "soak": "tsc -p tsconfig.test.json --outDir .test-dist-soak && node scripts/soak.mjs"
+    "soak": "tsc -p tsconfig.test.json --outDir .test-dist-soak && node scripts/soak.mjs",
+    "sync-dsh": "node scripts/sync-dsh-baseline.mjs"
   },
   "packageManager": "pnpm@12.9.1",
   "devDependencies": {
     "@deepseek-ai/cordis": "4.1.0",
-    "@deepseek-ai/dsh": "0.2.2-rc.1",
+    "@deepseek-ai/dsh": "0.2.2-rc.2",
     "@deepseek-ai/schemastery": "3.19.0",
     "@types/node": "24.19.1",
     "playwright": "1.63.0",
