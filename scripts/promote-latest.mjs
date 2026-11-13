@@ -30,8 +30,8 @@ const DIST_TAG_HINT = 'enable "Allow npm dist-tag" for the publish.yml trusted p
 // npm answers the publish request before the version is readable from the
 // registry ("being processed and may take a few minutes to become available").
 // The promote job therefore waits for visibility instead of asserting once.
-const DEFAULT_PUBLISH_ATTEMPTS = 36;
-const DEFAULT_PUBLISH_DELAY_MS = 5000;
+const DEFAULT_PUBLISH_ATTEMPTS = 180;
+const DEFAULT_PUBLISH_DELAY_MS = 10000;
 
 const sleep = (milliseconds) => new Promise((done) => setTimeout(done, milliseconds));
 
