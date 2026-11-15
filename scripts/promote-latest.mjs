@@ -18,7 +18,9 @@ import { resolve } from 'node:path';
  * Usage: node scripts/promote-latest.mjs [--dry-run] [--registry URL] [MANIFEST]
  * Environment: EXPECTED_VERSION (required), GITHUB_STEP_SUMMARY (optional),
  * PROMOTE_LATEST_PUBLISH_ATTEMPTS / PROMOTE_LATEST_PUBLISH_DELAY_MS (optional;
- * bounded wait for npm to expose the freshly published version).
+ * bounded wait for npm to expose the freshly published version),
+ * PROMOTE_LATEST_UPDATE_ATTEMPTS / PROMOTE_LATEST_UPDATE_DELAY_MS (optional;
+ * bounded wait for npm dist-tags to reflect the updated latest tag).
  */
 
 const PACKAGE_NAME = '@zapsaang/dsh-web-bridge';
@@ -32,6 +34,11 @@ const DIST_TAG_HINT = 'enable "Allow npm dist-tag" for the publish.yml trusted p
 // The promote job therefore waits for visibility instead of asserting once.
 const DEFAULT_PUBLISH_ATTEMPTS = 180;
 const DEFAULT_PUBLISH_DELAY_MS = 10000;
+// npm accepts dist-tag mutation requests before CDN replicas converge and
+// expose the new dist-tags document. Wait for visibility instead of asserting
+// immediately on replication lag.
+const DEFAULT_UPDATE_ATTEMPTS = 180;
+const DEFAULT_UPDATE_DELAY_MS = 10000;
 
 const sleep = (milliseconds) => new Promise((done) => setTimeout(done, milliseconds));
 
@@ -246,15 +253,26 @@ const main = async () => {
   if (add.stdout) process.stdout.write(add.stdout);
   if (add.stderr) process.stderr.write(add.stderr);
 
+  const updateAttempts = environmentInteger('PROMOTE_LATEST_UPDATE_ATTEMPTS', DEFAULT_UPDATE_ATTEMPTS, 1);
+  const updateDelayMs = environmentInteger('PROMOTE_LATEST_UPDATE_DELAY_MS', DEFAULT_UPDATE_DELAY_MS, 0);
+
   let observed;
-  for (let attempt = 1; attempt <= 5; attempt += 1) {
+  for (let attempt = 1; attempt <= updateAttempts; attempt += 1) {
     const latestTags = await requestJson(distTagsUrl);
-    observed = latestTags.latest;
-    if (observed === expectedVersion) break;
-    if (attempt < 5) await sleep(1000);
+    observed = latestTags?.latest;
+    if (observed === expectedVersion) {
+      if (attempt > 1) {
+        console.log(`promote-latest: updated latest visible after ${attempt} attempt(s)`);
+      }
+      break;
+    }
+    if (attempt < updateAttempts) {
+      console.log(`promote-latest: latest tag update not visible yet (attempt ${attempt}/${updateAttempts}); retrying in ${updateDelayMs}ms`);
+      await sleep(updateDelayMs);
+    }
   }
   assert.equal(observed, expectedVersion,
-    `latest is ${observed ?? 'none'} after the update, expected ${expectedVersion}`);
+    `latest is ${observed ?? 'none'} after the update on ${registry} after ${updateAttempts} attempt(s), expected ${expectedVersion}`);
 
   console.log(`promote-latest: moved latest to ${expectedVersion}`);
   recordSummary(['### `latest` promotion', '', ...details.map((line) => `- ${line}`),

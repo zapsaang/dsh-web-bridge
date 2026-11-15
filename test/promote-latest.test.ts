@@ -23,6 +23,7 @@ interface RegistryOptions {
   readonly publishedVersion?: string;
   readonly promoteMarker?: string;
   readonly versionVisibleAfter?: number;
+  readonly updateVisibleAfter?: number;
 }
 
 const startRegistry = async (
@@ -32,6 +33,7 @@ const startRegistry = async (
 ): Promise<Registry> => {
   const requests: string[] = [];
   let versionRequests = 0;
+  let updateRequests = 0;
   const server = createServer((request, response) => {
     requests.push(`${request.method ?? ''} ${request.url ?? ''}`);
     const url = request.url ?? '';
@@ -43,9 +45,14 @@ const startRegistry = async (
       }
       // The fake npm touches the marker: only then does the registry report the move.
       const promoted = options.promoteMarker !== undefined && existsSync(options.promoteMarker);
-      const body = promoted
-        ? { ...(tags ?? {}), latest: options.publishedVersion }
-        : (tags ?? {});
+      let latest = tags?.['latest'];
+      if (promoted) {
+        updateRequests += 1;
+        if (updateRequests > (options.updateVisibleAfter ?? 0)) {
+          latest = options.publishedVersion;
+        }
+      }
+      const body = { ...(tags ?? {}), ...(latest !== undefined ? { latest } : {}) };
       response.writeHead(200, { 'content-type': 'application/json', connection: 'close' });
       response.end(JSON.stringify(body));
       return;
@@ -340,6 +347,48 @@ test('promote-latest fails closed when npm never exposes the published version',
   assert.equal(result.status, 1);
   assert.match(result.stderr, /is not published on .* after 3 attempt/);
   assert.doesNotMatch(readFileSync(argsFile, 'utf8'), /dist-tag add/);
+});
+
+test('promote-latest waits for npm dist-tags to reflect the updated latest tag', async (t) => {
+  const state = mkdtempSync(join(tmpdir(), 'promote-latest-state-'));
+  t.after(() => rmSync(state, { recursive: true, force: true }));
+  const argsFile = join(state, 'npm-args.txt');
+  const marker = join(state, 'promoted');
+  const registry = await withRegistry(t, { latest: '0.1.0-alpha.5', alpha: '0.1.0-alpha.5' }, 200, {
+    publishedVersion: '0.1.0-alpha.6', updateVisibleAfter: 2, promoteMarker: marker,
+  });
+  const bin = writeFakeNpm(t, '11.21.1', { argsFile, marker });
+  const manifest = writeManifest(t, '0.1.0-alpha.6');
+  const result = await run(['--registry', registry.url, manifest], {
+    EXPECTED_VERSION: '0.1.0-alpha.6',
+    PATH: `${bin}:${process.env['PATH'] ?? ''}`,
+    PROMOTE_LATEST_UPDATE_ATTEMPTS: '5',
+    PROMOTE_LATEST_UPDATE_DELAY_MS: '10',
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /latest tag update not visible yet \(attempt 1\/5\)/);
+  assert.match(result.stdout, /updated latest visible after 3 attempt/);
+  assert.match(result.stdout, /moved latest to 0\.1\.0-alpha\.6/);
+});
+
+test('promote-latest fails closed when npm dist-tags never reflects the updated latest tag', async (t) => {
+  const state = mkdtempSync(join(tmpdir(), 'promote-latest-state-'));
+  t.after(() => rmSync(state, { recursive: true, force: true }));
+  const argsFile = join(state, 'npm-args.txt');
+  const marker = join(state, 'promoted');
+  const registry = await withRegistry(t, { latest: '0.1.0-alpha.5', alpha: '0.1.0-alpha.5' }, 200, {
+    publishedVersion: '0.1.0-alpha.6', updateVisibleAfter: 99, promoteMarker: marker,
+  });
+  const bin = writeFakeNpm(t, '11.21.1', { argsFile, marker });
+  const manifest = writeManifest(t, '0.1.0-alpha.6');
+  const result = await run(['--registry', registry.url, manifest], {
+    EXPECTED_VERSION: '0.1.0-alpha.6',
+    PATH: `${bin}:${process.env['PATH'] ?? ''}`,
+    PROMOTE_LATEST_UPDATE_ATTEMPTS: '3',
+    PROMOTE_LATEST_UPDATE_DELAY_MS: '10',
+  });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /latest is 0\.1\.0-alpha\.5 after the update on .* after 3 attempt/);
 });
 
 test('promote-latest refuses to move latest with an npm that lacks OIDC dist-tags', async (t) => {
