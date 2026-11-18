@@ -57,7 +57,8 @@
     "test": "node --input-type=module -e \"import { rmSync } from 'node:fs'; rmSync('.test-dist', { recursive: true, force: true });\" && tsc -p tsconfig.test.json && node --test .test-dist/test/*.test.js",
     "prepack": "npm run build && node scripts/check-pack-files.mjs",
     "soak": "tsc -p tsconfig.test.json --outDir .test-dist-soak && node scripts/soak.mjs",
-    "sync-dsh": "node scripts/sync-dsh-baseline.mjs"
+    "sync-dsh": "node scripts/sync-dsh-baseline.mjs",
+    "check-upstream": "node scripts/prepare-upstream-pr.mjs --check-only"
   },
   "packageManager": "pnpm@12.9.1",
   "devDependencies": {

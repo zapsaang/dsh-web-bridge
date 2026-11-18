@@ -1,0 +1,171 @@
+name: DSH upstream monitor and PR
+
+on:
+  schedule:
+    # Run once every hour at minute 15 (avoiding the :00 queue spike on GitHub Actions)
+    - cron: '15 * * * *'
+  workflow_dispatch:
+    inputs:
+      target_dsh:
+        description: 'Optional manual target DSH version (e.g. 0.2.2-rc.5)'
+        required: false
+        type: string
+      dry_run:
+        description: 'Dry run (run all gates and checks, but do not push branch or create PR)'
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+concurrency:
+  group: dsh-upstream-monitor
+  cancel-in-progress: false
+
+jobs:
+  check-and-propose:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '24.21.0'
+
+      - name: Install dependencies & Playwright
+        run: |
+          corepack pnpm install --frozen-lockfile
+          corepack pnpm exec playwright install --with-deps chromium
+
+      - name: Probe upstream DSH for newer version
+        id: probe
+        env:
+          INPUT_TARGET_DSH: ${{ inputs.target_dsh }}
+        run: |
+          args=("--check-only" "--json")
+          if [ -n "$INPUT_TARGET_DSH" ]; then
+            args+=("--target-dsh" "$INPUT_TARGET_DSH")
+          fi
+          output=$(node scripts/prepare-upstream-pr.mjs "${args[@]}")
+          echo "$output"
+          has_update=$(echo "$output" | jq -r '.hasUpdate')
+          branch_name=$(echo "$output" | jq -r '.branchName')
+          target_dsh=$(echo "$output" | jq -r '.targetDsh')
+          next_version=$(echo "$output" | jq -r '.nextPluginVersion')
+          pr_title=$(echo "$output" | jq -r '.prTitle')
+
+          echo "has_update=$has_update" >> "$GITHUB_OUTPUT"
+          echo "branch_name=$branch_name" >> "$GITHUB_OUTPUT"
+          echo "target_dsh=$target_dsh" >> "$GITHUB_OUTPUT"
+          echo "next_version=$next_version" >> "$GITHUB_OUTPUT"
+          echo "pr_title=$pr_title" >> "$GITHUB_OUTPUT"
+
+      - name: Check for existing PR
+        if: steps.probe.outputs.has_update == 'true'
+        id: existing_pr
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BRANCH: ${{ steps.probe.outputs.branch_name }}
+        run: |
+          count=$(gh pr list --head "$BRANCH" --state open --json number -q 'length')
+          if [ "$count" -gt 0 ]; then
+            echo "An open PR already exists for branch $BRANCH. Skipping."
+            echo "already_exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "already_exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Prepare upstream bump and execute baseline gates
+        if: steps.probe.outputs.has_update == 'true' && steps.existing_pr.outputs.already_exists == 'false'
+        env:
+          INPUT_TARGET_DSH: ${{ steps.probe.outputs.target_dsh }}
+          IS_DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          args=("--target-dsh" "$INPUT_TARGET_DSH")
+          if [ "$IS_DRY_RUN" = "true" ]; then
+            args+=("--dry-run")
+          fi
+          node scripts/prepare-upstream-pr.mjs "${args[@]}"
+
+      - name: Run privileged Linux DAC gate (A7-A9)
+        if: steps.probe.outputs.has_update == 'true' && steps.existing_pr.outputs.already_exists == 'false'
+        run: |
+          corepack pnpm exec tsc -p tsconfig.test.json --outDir .test-dist-linux
+          chmod -R a+rX .test-dist-linux node_modules
+          sudo -- chmod o+x "$HOME"
+          node_path=$(node -p 'process.execPath')
+          sudo -- env PATH="$PATH" "$node_path" scripts/check-socket-access-linux.mjs
+
+      - name: Verify packaging dry-run
+        if: steps.probe.outputs.has_update == 'true' && steps.existing_pr.outputs.already_exists == 'false'
+        env:
+          NEXT_VERSION: ${{ steps.probe.outputs.next_version }}
+        run: |
+          EXPECTED_VERSION="$NEXT_VERSION" GITHUB_REF=refs/heads/main node scripts/check-release.mjs
+          npm pack
+          npm publish "./zapsaang-dsh-web-bridge-${NEXT_VERSION}.tgz" --dry-run --tag rc --access public --registry https://registry.npmjs.org/
+          rm -f *.tgz
+
+      - name: Commit, push branch and create Pull Request
+        if: steps.probe.outputs.has_update == 'true' && steps.existing_pr.outputs.already_exists == 'false' && inputs.dry_run != true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BRANCH: ${{ steps.probe.outputs.branch_name }}
+          TARGET_DSH: ${{ steps.probe.outputs.target_dsh }}
+          NEXT_VER: ${{ steps.probe.outputs.next_version }}
+          PR_TITLE: ${{ steps.probe.outputs.pr_title }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git checkout -b "$BRANCH"
+          git add package.json pnpm-lock.yaml README.md MAINTAINING.md
+          git commit -m "chore(deps): sync DSH ${TARGET_DSH} baseline and bump to ${NEXT_VER}"
+          git push origin "$BRANCH" --force
+
+          cat <<EOF > pr_body.md
+## 🤖 Automated Upstream DSH Baseline Synchronization
+
+Upstream **\`@deepseek-ai/dsh\`** released a new baseline version: **\`${TARGET_DSH}\`**.
+
+### 📦 Changes Included
+- Advanced \`@deepseek-ai/dsh\` to \`${TARGET_DSH}\` in \`peerDependencies\` and \`devDependencies\`.
+- Bumped plugin version to **\`${NEXT_VER}\`**.
+- Refreshed \`pnpm-lock.yaml\` with resolved Cordis and Schemastery peer dependencies.
+- Updated documentation (\`README.md\` and \`MAINTAINING.md\`).
+
+### ✅ Local Release Gates Executed & Passed
+- [x] \`@deepseek-ai/dsh-app-boot\` compatibility admission evaluated (\`evaluatePluginCompatibility\` clean).
+- [x] TypeScript compilation & \`typecheck\` passed.
+- [x] Unit test suites passed (721 tests).
+- [x] Real DSH integration suites passed (72 tests).
+- [x] Playwright browser integration suite passed (7 tests).
+- [x] Privileged Linux DAC & socket lease gate (A7-A9) passed.
+- [x] \`npm pack\` archive content allowlist (32 files) verified.
+- [x] \`npm publish --dry-run\` packaging gate passed.
+
+---
+*Merging this PR will trigger the automated release workflow to tag and publish \`${NEXT_VER}\` to npm.*
+EOF
+
+          gh pr create \
+            --base main \
+            --head "$BRANCH" \
+            --title "$PR_TITLE" \
+            --body-file pr_body.md \
+            --label "dependencies,automated-pr"
+
+      - name: Alert on compatibility failure
+        if: failure() && steps.probe.outputs.has_update == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TARGET_DSH: ${{ steps.probe.outputs.target_dsh }}
+        run: |
+          gh issue create \
+            --title "🚨 DSH 上游新版本兼容性门禁失败: ${TARGET_DSH}" \
+            --body "定时监控任务检测到 \`@deepseek-ai/dsh\` 发布了新版本 \`${TARGET_DSH}\`，但在执行兼容性测试或 Linux A7-A9 门禁时失败，请维护者介入检查。" \
+            --label "bug,needs-triage" || true
