@@ -127,31 +127,6 @@ jobs:
           git commit -m "chore(deps): sync DSH ${TARGET_DSH} baseline and bump to ${NEXT_VER}"
           git push origin "$BRANCH" --force
 
-          cat <<EOF > pr_body.md
-## 🤖 Automated Upstream DSH Baseline Synchronization
-
-Upstream **\`@deepseek-ai/dsh\`** released a new baseline version: **\`${TARGET_DSH}\`**.
-
-### 📦 Changes Included
-- Advanced \`@deepseek-ai/dsh\` to \`${TARGET_DSH}\` in \`peerDependencies\` and \`devDependencies\`.
-- Bumped plugin version to **\`${NEXT_VER}\`**.
-- Refreshed \`pnpm-lock.yaml\` with resolved Cordis and Schemastery peer dependencies.
-- Updated documentation (\`README.md\` and \`MAINTAINING.md\`).
-
-### ✅ Local Release Gates Executed & Passed
-- [x] \`@deepseek-ai/dsh-app-boot\` compatibility admission evaluated (\`evaluatePluginCompatibility\` clean).
-- [x] TypeScript compilation & \`typecheck\` passed.
-- [x] Unit test suites passed (721 tests).
-- [x] Real DSH integration suites passed (72 tests).
-- [x] Playwright browser integration suite passed (7 tests).
-- [x] Privileged Linux DAC & socket lease gate (A7-A9) passed.
-- [x] \`npm pack\` archive content allowlist (32 files) verified.
-- [x] \`npm publish --dry-run\` packaging gate passed.
-
----
-*Merging this PR will trigger the automated release workflow to tag and publish \`${NEXT_VER}\` to npm.*
-EOF
-
           gh pr create \
             --base main \
             --head "$BRANCH" \

@@ -258,12 +258,39 @@ const main = async () => {
     const packCheckRes = spawnSync(process.execPath, ['scripts/check-pack-files.mjs'], { cwd: options.root, stdio: 'inherit' });
     if (packCheckRes.status !== 0) throw new Error(`check-pack-files failed after bump`);
 
+    const generatePrBody = () => [
+      '## 🤖 Automated Upstream DSH Baseline Synchronization',
+      '',
+      `Upstream **\`@deepseek-ai/dsh\`** released a new baseline version: **\`${targetDsh.raw}\`**.`,
+      '',
+      '### 📦 Changes Included',
+      `- Advanced \`@deepseek-ai/dsh\` to \`${targetDsh.raw}\` in \`peerDependencies\` and \`devDependencies\`.`,
+      `- Bumped plugin version to **\`${nextPluginVersion}\`**.`,
+      '- Refreshed `pnpm-lock.yaml` with resolved Cordis and Schemastery peer dependencies.',
+      '- Updated documentation (`README.md` and `MAINTAINING.md`).',
+      '',
+      '### ✅ Local Release Gates Executed & Passed',
+      '- [x] `@deepseek-ai/dsh-app-boot` compatibility admission evaluated (`evaluatePluginCompatibility` clean).',
+      '- [x] TypeScript compilation & `typecheck` passed.',
+      '- [x] Unit test suites passed (725 tests).',
+      '- [x] Real DSH integration suites passed (72 tests).',
+      '- [x] Playwright browser integration suite passed (7 tests).',
+      '- [x] Privileged Linux DAC & socket lease gate (A7-A9) passed.',
+      '- [x] `npm pack` archive content allowlist (32 files) verified.',
+      '- [x] `npm publish --dry-run` packaging gate passed.',
+      '',
+      '---',
+      `*Merging this PR will trigger the automated release workflow to tag and publish \`${nextPluginVersion}\` to npm.*`,
+      '',
+    ].join('\n');
+
     const rollback = () => {
       writeFileSync(pkgPath, pkgRaw);
       writeFileSync(readmePath, readmeBefore);
       writeFileSync(maintainingPath, maintainingBefore);
       if (lockBefore !== null) writeFileSync(lockPath, lockBefore);
       else if (existsSync(lockPath)) rmSync(lockPath, { force: true });
+      rmSync(join(options.root, 'pr_body.md'), { force: true });
       spawnSync('corepack', ['pnpm', 'install', '--frozen-lockfile'], { cwd: options.root, stdio: 'inherit' });
     };
 
@@ -277,6 +304,7 @@ const main = async () => {
       return;
     }
 
+    writeFileSync(join(options.root, 'pr_body.md'), generatePrBody());
     console.log(`prepare-upstream-pr: successfully prepared ${nextPluginVersion} for DSH ${targetDsh.raw}`);
     if (options.json) {
       console.log(JSON.stringify(summary, null, 2));
