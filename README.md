@@ -2,7 +2,7 @@
 
 > **Unix domain socket reverse proxy and automatic native session bootstrap for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (DSH) Web, packaged as a Cordis plugin.**
 
-> **Status: Release Candidate (0.1.0-rc.5).** Production-ready reverse proxy contract with strict Unix socket lifecycle, native DSH session bootstrap, and multi-channel publishing verification. Pinned peers remain a verified compatibility baseline — see [Compatibility](#compatibility) before treating any of this as supported.
+> **Status: Release Candidate (0.1.0-rc.6).** Production-ready reverse proxy contract with strict Unix socket lifecycle, native DSH session bootstrap, and multi-channel publishing verification. Pinned peers remain a verified compatibility baseline — see [Compatibility](#compatibility) before treating any of this as supported.
 
 The bridge runs inside the DSH process, listens only on a Unix domain socket, and forwards to the DSH web server over loopback. Any access layer that can speak HTTP/1.1 over a Unix socket can front it: Nginx, Caddy, Cloudflare Tunnel, HAProxy, a local proxy, or a trusted local client. TLS, remote authentication, and access control stay in that layer. The bridge's own job is narrower: expose the socket safely, enforce an explicit Host allowlist, and complete DSH's native token exchange locally when a browser's page navigation hits `401` — so launch tokens never leave the machine and never appear in a remote URL, log, or address bar.
 
@@ -91,7 +91,7 @@ Pinned peers (exact versions, no ranges):
 
 | Peer | Version |
 |---|---|
-| `@deepseek-ai/dsh` | `0.2.2-rc.4` |
+| `@deepseek-ai/dsh` | `0.2.2-rc.5` |
 | `@deepseek-ai/cordis` | `4.1.0` |
 | `@deepseek-ai/schemastery` | `3.19.0` |
 
@@ -100,7 +100,7 @@ Runtime: Node `>=24.21.0 <25` plus the util-linux `flock` system tool.
 Install into the web profile (the CLI forwards the remaining arguments to pnpm inside the profile directory):
 
 ```sh
-dsh plugin --profile web add @zapsaang/dsh-web-bridge@0.1.0-rc.5
+dsh plugin --profile web add @zapsaang/dsh-web-bridge@0.1.0-rc.6
 ```
 
 Prefer an explicit version or `@rc`, and check `npm view @zapsaang/dsh-web-bridge dist-tags --json` instead of assuming which tag points at the newest release.
@@ -474,6 +474,10 @@ The bridge relies on exactly these DSH behaviors and fails closed if they change
 If DSH removes or changes any of these, the bridge must stop auto-bootstrap and return the original `401` — never synthesize cookies, read the signing secret, inject a fixed token, or bypass DSH auth.
 
 ### Migration notes
+
+### 0.1.0-rc.6 Specifications and Migration
+
+Version `0.1.0-rc.6` advances the pinned compatibility baseline to `@deepseek-ai/dsh` `0.2.2-rc.5` (with Cordis `4.1.0` and Schemastery `3.19.0`) via automated upstream synchronization.
 
 **DSH 0.2.1-rc migration.** The web-runtime row (`@deepseek-ai/dsh-web-app`) no longer owns `trustedHosts`, and the `webRuntime` service is gone. The connection row (`@deepseek-ai/dsh-client-connection`) owns the Host/Origin fence and its active `trustedHosts` list. This bridge therefore injects `[connection, webServer]` and cross-checks `authorities` against the live connection list. A deployment overlay written for an older alpha that still puts `trustedHosts` on the web-runtime row must move that key to the `connection` row; current web-runtime schemas reject the old key.
 
