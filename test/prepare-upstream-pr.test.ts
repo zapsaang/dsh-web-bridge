@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { test } from 'node:test';
 
@@ -31,6 +32,12 @@ test('prepare-upstream-pr with older target-dsh indicates no update', () => {
 });
 
 test('prepare-upstream-pr with newer target-dsh projects next RC version', () => {
+  const manifest = JSON.parse(readFileSync(resolve('package.json'), 'utf8'));
+  const currentVersion = manifest.version;
+  const match = /^(.+-rc\.)(\d+)$/.exec(currentVersion);
+  assert.ok(match !== null, `expected current version to be an rc version, got ${currentVersion}`);
+  const expectedNextVersion = `${match[1]}${Number(match[2]) + 1}`;
+
   const result = spawnSync(process.execPath, [script, '--check-only', '--json', '--target-dsh', '0.2.3-rc.1'], {
     encoding: 'utf8',
   });
@@ -38,9 +45,10 @@ test('prepare-upstream-pr with newer target-dsh projects next RC version', () =>
   const data = JSON.parse(result.stdout);
   assert.equal(data.hasUpdate, true);
   assert.equal(data.targetDsh, '0.2.3-rc.1');
-  assert.equal(data.nextPluginVersion, '0.1.0-rc.6');
+  assert.equal(data.currentPluginVersion, currentVersion);
+  assert.equal(data.nextPluginVersion, expectedNextVersion);
   assert.equal(data.branchName, 'chore/sync-dsh-0.2.3-rc.1');
-  assert.equal(data.prTitle, 'chore(deps): sync DSH 0.2.3-rc.1 baseline and bump to 0.1.0-rc.6');
+  assert.equal(data.prTitle, `chore(deps): sync DSH 0.2.3-rc.1 baseline and bump to ${expectedNextVersion}`);
 });
 
 test('prepare-upstream-pr with --dry-run on older version exits clean without modifying files', () => {
